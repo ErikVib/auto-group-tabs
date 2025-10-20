@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8" />
+  <title>Auto Group Tabs Settings</title>
+  <style>
+    body {
+      max-width: 600px;
+      margin: 40px auto;
+      padding: 20px;
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #f9f9f9;
+    }
+    h1 {
+      font-size: 24px;
+      font-weight: 600;
+      margin-bottom: 10px;
+      color: #333;
+    }
+    .subtitle {
+      color: #666;
+      margin-bottom: 30px;
+      font-size: 14px;
+    }
+    .section {
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+      margin-bottom: 20px;
+    }
+    h2 {
+      margin: 0 0 15px 0;
+      font-size: 16px;
+      font-weight: 600;
+      color: #333;
+    }
+    #groupList {
+      list-style: none;
+      padding: 0;
+      margin: 0 0 15px 0;
+    }
+    #groupList li {
+      padding: 12px;
+      margin-bottom: 8px;
+      background: #f5f5f5;
+      border-radius: 6px;
+      font-size: 14px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .group-info {
+      flex: 1;
+      overflow: hidden;
+    }
+    .group-name {
+      font-weight: 600;
+      margin-bottom: 4px;
+      color: #333;
+    }
+    .group-pattern {
+      color: #666;
+      font-size: 13px;
+    }
+    .edit-btn {
+      background: #007bff;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      padding: 6px 10px;
+      font-size: 16px;
+      cursor: pointer;
+      flex-shrink: 0;
+      line-height: 1;
+    }
+    .edit-btn:hover {
+      background: #0056b3;
+    }
+    .delete-btn {
+      background: #dc3545;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      padding: 6px 10px;
+      font-size: 16px;
+      cursor: pointer;
+      flex-shrink: 0;
+      line-height: 1;
+    }
+    .delete-btn:hover {
+      background: #c82333;
+    }
+    .empty-message {
+      text-align: center;
+      color: #999;
+      padding: 30px;
+      font-size: 14px;
+    }
+    form {
+      display: grid;
+      gap: 12px;
+    }
+    label {
+      font-size: 13px;
+      font-weight: 600;
+      color: #555;
+      margin-bottom: 4px;
+      display: block;
+    }
+    input, select {
+      width: 100%;
+      padding: 10px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-size: 14px;
+      box-sizing: border-box;
+    }
+    input:focus, select:focus {
+      outline: none;
+      border-color: #4CAF50;
+    }
+    button[type="submit"] {
+      background: #4CAF50;
+      color: white;
+      border: none;
+      cursor: pointer;
+      font-weight: 600;
+      padding: 12px;
+      border-radius: 4px;
+      font-size: 14px;
+      margin-top: 8px;
+    }
+    button[type="submit"]:hover {
+      background: #45a049;
+    }
+    .cancel-btn {
+      background: #6c757d;
+      color: white;
+      border: none;
+      cursor: pointer;
+      font-weight: 600;
+      padding: 12px;
+      border-radius: 4px;
+      font-size: 14px;
+      margin-top: 8px;
+      display: none;
+    }
+    .cancel-btn:hover {
+      background: #5a6268;
+    }
+    .button-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    .color-indicator {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      display: inline-block;
+      margin-right: 8px;
+      vertical-align: middle;
+    }
+    .checkbox-label {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      cursor: pointer;
+      font-size: 14px;
+      margin-bottom: 8px;
+    }
+    .checkbox-label input[type="checkbox"] {
+      width: auto;
+      cursor: pointer;
+    }
+    .settings-help {
+      margin: 8px 0 0 0;
+      font-size: 13px;
+      color: #666;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>Auto Group Tabs</h1>
+  <div class="subtitle">Automatically organize tabs into groups based on URL patterns</div>
+
+  <div class="section">
+    <h2>Current Rules</h2>
+    <ul id="groupList"></ul>
+  </div>
+
+  <div class="section">
+    <h2>Settings</h2>
+    <label class="checkbox-label">
+      <input type="checkbox" id="groupUnmatched" />
+      <span>Group unmatched tabs in "etc"</span>
+    </label>
+    <p class="settings-help">When enabled, tabs that don't match any rule will be grouped together.</p>
+  </div>
+
+  <div class="section">
+    <h2 id="groupFormTitle">Add New Rule</h2>
+    <form id="groupForm">
+      <div>
+        <label for="name">Group Name</label>
+        <input id="name" placeholder="e.g., Work, Social Media" required />
+      </div>
+      <div>
+        <label for="pattern">URL Pattern</label>
+        <input id="pattern" placeholder="e.g., *.github.com/* or *reddit.com*" required />
+      </div>
+      <div>
+        <label for="color">Color</label>
+        <select id="color">
+          <option>blue</option>
+          <option>yellow</option>
+          <option>red</option>
+          <option>green</option>
+          <option>purple</option>
+          <option>orange</option>
+          <option>pink</option>
+          <option>cyan</option>
+          <option>gray</option>
+        </select>
+      </div>
+      <div class="button-row">
+        <button type="submit" id="submitBtn">Add Rule</button>
+        <button type="button" id="cancelBtn" class="cancel-btn">Cancel</button>
+      </div>
+    </form>
+  </div>
+
+  <script src="shared.js"></script>
+  <script src="options.js"></script>
+</body>
+
+</html>

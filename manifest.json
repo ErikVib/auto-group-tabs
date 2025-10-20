@@ -1,0 +1,25 @@
+{
+  "manifest_version": 2,
+  "name": "Auto Group Tabs",
+  "version": "1.0.0",
+  "description": "Automatically organize tabs into color-coded groups based on URL patterns. Keep your browser tidy with wildcard rules that group and ungroup tabs dynamically.",
+  "author": "ErikVib",
+  "homepage_url": "https://github.com/ErikVib/auto-group-tabs",
+  "icons": {
+    "48": "icons/icon.png",
+    "96": "icons/icon.png"
+  },
+  "permissions": ["tabs", "tabGroups", "storage"],
+  "background": {
+    "scripts": ["background.js"],
+    "persistent": true
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
+  "browser_action": {
+    "default_title": "Auto Group Tabs",
+    "default_popup": "popup.html"
+  }
+}
