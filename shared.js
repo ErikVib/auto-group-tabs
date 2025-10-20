@@ -34,8 +34,11 @@ async function refreshList(listElementId) {
   list.innerHTML = "";
   
   if (groups.length === 0) {
-    list.innerHTML = '<div class="empty-message">No rules configured yet' + 
-      (listElementId === 'groupList' ? '. Add one below!' : '') + '</div>';
+    const emptyDiv = document.createElement("div");
+    emptyDiv.className = "empty-message";
+    emptyDiv.textContent = 'No rules configured yet' + 
+      (listElementId === 'groupList' ? '. Add one below!' : '');
+    list.appendChild(emptyDiv);
     return;
   }
   
@@ -52,7 +55,8 @@ async function refreshList(listElementId) {
     
     const nameDiv = document.createElement("div");
     nameDiv.className = "group-name";
-    nameDiv.innerHTML = colorIndicator.outerHTML + g.name;
+    nameDiv.appendChild(colorIndicator.cloneNode(true));
+    nameDiv.appendChild(document.createTextNode(g.name));
     
     const patternDiv = document.createElement("div");
     patternDiv.className = "group-pattern";
@@ -67,13 +71,13 @@ async function refreshList(listElementId) {
     
     const editBtn = document.createElement("button");
     editBtn.className = "edit-btn";
-    editBtn.innerHTML = "&#9998;";
+    editBtn.textContent = "✎"; // Pen icon
     editBtn.title = "Edit rule";
     editBtn.onclick = () => startEdit(i, g);
     
     const deleteBtn = document.createElement("button");
     deleteBtn.className = "delete-btn";
-    deleteBtn.innerHTML = "&#10005;";
+    deleteBtn.textContent = "✕"; // X icon
     deleteBtn.title = "Delete rule";
     deleteBtn.onclick = () => deleteRule(i, g.name, listElementId);
     
