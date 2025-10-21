@@ -1,6 +1,11 @@
 # Auto Group Tabs
 
-Automatically organize your browser tabs into groups based on URL patterns. Keep your browser tidy without manual tab management!
+Automatically organize your browser tabs into groups based on URL patterns. Keep your browser tidy without manual tab  
+management!
+A browser extension that automatically organizes tabs into color-coded groups based on customizable URL patterns.  
+Use wildcard rules to group and ungroup tabs dynamically.
+
+Available for both **Firefox** and **Chrome**.
 
 ## Features
 
@@ -12,14 +17,27 @@ Automatically organize your browser tabs into groups based on URL patterns. Keep
 
 ## Installation
 
-### From Source
+### Firefox
+
+#### From Source
 1. Clone or download this repository
 2. Open Firefox and navigate to `about:debugging`
 3. Click "This Firefox" → "Load Temporary Add-on"
-4. Select the `manifest.json` file from the extension directory
+4. Navigate to the `firefox/` directory and select the `manifest.json` file
 
-### From Firefox Add-ons (Coming Soon)
+#### From Firefox Add-ons (Coming Soon)
 *(Once published to Firefox Add-ons store)*
+
+### Chrome
+
+#### From Source
+1. Clone or download this repository
+2. Open Chrome and navigate to `chrome://extensions`
+3. Enable "Developer mode" (toggle in top right)
+4. Click "Load unpacked"
+5. Select the `chrome/` directory
+
+#### From Chrome Web Store (Coming... never as long as google charges fees to publish free extensions)
 
 ## Usage
 
@@ -55,6 +73,7 @@ This extension:
 ## Compatibility
 
 - **Firefox**: Version 89+ (requires Tab Groups API support)
+- **Chrome**: Version 89+ (requires Tab Groups API support)
 
 ## Contributing
 
@@ -70,3 +89,4 @@ MIT License - See LICENSE file for details
 ## Support
 
 If you encounter issues or have questions, please file an issue on the GitHub repository.
+
