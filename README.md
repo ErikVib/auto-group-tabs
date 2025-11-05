@@ -25,8 +25,8 @@ Available for both **Firefox** and **Chrome**.
 3. Click "This Firefox" → "Load Temporary Add-on"
 4. Navigate to the `firefox/` directory and select the `manifest.json` file
 
-#### From Firefox Add-ons (Coming Soon)
-*(Once published to Firefox Add-ons store)*
+#### From Firefox Add-ons 
+Install from [Firefox Add-ons](https://addons.mozilla.org/en-US/firefox/addon/auto-group-tabs/)
 
 ### Chrome
 
