@@ -31,7 +31,14 @@ const VALID_COLORS = new Set([
 // -----------------------------------------------------------------------------
 
 function normalizeColor(color, fallback = "blue") {
-  return VALID_COLORS.has(color) ? color : fallback;
+  const normalized =
+    color === "gray"
+      ? "grey"
+      : color;
+
+  return VALID_COLORS.has(normalized)
+    ? normalized
+    : fallback;
 }
 
 function wildcardMatch(url, pattern) {
