@@ -1,14 +1,4 @@
 // Auto Group Tabs - Firefox background script
-//
-// Main changes compared with the original implementation:
-// 1. groupId values are NOT persisted.
-// 2. Groups are resolved dynamically by windowId + title.
-// 3. Grouping is isolated per Firefox window.
-// 4. Operations for the same window are serialized to avoid races.
-// 5. Tabs already in the correct group are not grouped again.
-// 6. "etc" groups are created separately for each window.
-// 7. Wildcard matching treats "*" as a wildcard and escapes other regex chars.
-// 8. Legacy groupMap storage is automatically removed.
 
 const UNGROUPED_ID = -1;
 const UNMATCHED_GROUP_NAME = "etc";
@@ -27,7 +17,7 @@ const VALID_COLORS = new Set([
 ]);
 
 // -----------------------------------------------------------------------------
-// Utilities
+// General helpers
 // -----------------------------------------------------------------------------
 
 function normalizeColor(color, fallback = "blue") {
@@ -41,6 +31,27 @@ function normalizeColor(color, fallback = "blue") {
     : fallback;
 }
 
+function normalizeGroupName(name) {
+  return String(name || "")
+    .trim()
+    .toLocaleLowerCase();
+}
+
+function compareGroupNames(a, b) {
+  return String(a || "").localeCompare(
+    String(b || ""),
+    undefined,
+    {
+      sensitivity: "base",
+      numeric: true
+    }
+  );
+}
+
+// -----------------------------------------------------------------------------
+// Wildcard matching
+// -----------------------------------------------------------------------------
+
 function wildcardMatch(url, pattern) {
   if (!url || !pattern) {
     return false;
@@ -49,10 +60,14 @@ function wildcardMatch(url, pattern) {
   try {
     const parsedUrl = new URL(url);
 
-    const hostname = parsedUrl.hostname.replace(/^www\./i, "");
+    const hostname = parsedUrl.hostname;
 
     const target =
       `${hostname}${parsedUrl.pathname}${parsedUrl.search}`;
+
+    const targetWithoutWww =
+      `${hostname.replace(/^www\./i, "")}` +
+      `${parsedUrl.pathname}${parsedUrl.search}`;
 
     const normalizedPattern = String(pattern)
       .trim()
@@ -63,52 +78,200 @@ function wildcardMatch(url, pattern) {
       return false;
     }
 
-    // Escape every regex-special character except "*".
-    // "*" remains the only wildcard supported by the extension.
+    // Escape regex metacharacters except "*".
+    // "*" is converted to the extension's wildcard.
     const regexPattern = normalizedPattern
       .replace(/[.+?^${}()|[\]\\]/g, "\\$&")
       .replace(/\*/g, ".*");
 
-    const regex = new RegExp(regexPattern, "i");
+    const regex =
+      new RegExp(regexPattern, "i");
 
-    return regex.test(hostname) || regex.test(target);
+    return (
+      regex.test(hostname) ||
+      regex.test(target) ||
+      regex.test(targetWithoutWww)
+    );
   } catch (error) {
-    console.warn("wildcardMatch failed:", {
-      url,
-      pattern,
-      error
-    });
+    console.warn(
+      "wildcardMatch failed:",
+      {
+        url,
+        pattern,
+        error
+      }
+    );
 
     return false;
   }
 }
 
-async function getSettings() {
-  const {
-    groups = [],
-    groupUnmatched = true
-  } = await browser.storage.local.get([
-    "groups",
-    "groupUnmatched"
-  ]);
+// -----------------------------------------------------------------------------
+// Rule metadata migration
+// -----------------------------------------------------------------------------
+
+function normalizeCreatedOrders(groups) {
+  const result =
+    groups.map(group => ({
+      ...group
+    }));
+
+  const usedOrders =
+    new Set();
+
+  let maxOrder =
+    result.reduce(
+      (max, group) => {
+        if (
+          Number.isInteger(group.createdOrder) &&
+          group.createdOrder > 0
+        ) {
+          return Math.max(
+            max,
+            group.createdOrder
+          );
+        }
+
+        return max;
+      },
+      0
+    );
+
+  let nextOrder =
+    maxOrder + 1;
+
+  let changed = false;
+
+  for (const group of result) {
+    const valid =
+      Number.isInteger(group.createdOrder) &&
+      group.createdOrder > 0 &&
+      !usedOrders.has(group.createdOrder);
+
+    if (valid) {
+      usedOrders.add(
+        group.createdOrder
+      );
+
+      continue;
+    }
+
+    group.createdOrder =
+      nextOrder++;
+
+    usedOrders.add(
+      group.createdOrder
+    );
+
+    changed = true;
+  }
 
   return {
-    groups: Array.isArray(groups) ? groups : [],
-    groupUnmatched
+    groups: result,
+    changed
   };
 }
 
-function findMatchingRule(url, groups) {
+async function migrateStorage() {
+  const {
+    groups = [],
+    groupSortMode = "creation"
+  } =
+    await browser.storage.local.get([
+      "groups",
+      "groupSortMode"
+    ]);
+
+  const normalized =
+    normalizeCreatedOrders(
+      Array.isArray(groups)
+        ? groups
+        : []
+    );
+
+  const updates = {};
+
+  if (normalized.changed) {
+    updates.groups =
+      normalized.groups;
+  }
+
+  if (
+    groupSortMode !== "creation" &&
+    groupSortMode !== "alphabetical"
+  ) {
+    updates.groupSortMode =
+      "creation";
+  }
+
+  if (
+    Object.keys(updates).length > 0
+  ) {
+    await browser.storage.local.set(
+      updates
+    );
+  }
+
+  // Legacy implementation persisted Firefox group IDs.
+  // They aren't stable across sessions.
+  await browser.storage.local.remove(
+    "groupMap"
+  );
+}
+
+// -----------------------------------------------------------------------------
+// Settings
+// -----------------------------------------------------------------------------
+
+async function getSettings() {
+  const {
+    groups = [],
+    groupUnmatched = true,
+    groupSortMode = "creation"
+  } =
+    await browser.storage.local.get([
+      "groups",
+      "groupUnmatched",
+      "groupSortMode"
+    ]);
+
+  return {
+    groups:
+      Array.isArray(groups)
+        ? groups
+        : [],
+
+    groupUnmatched,
+
+    groupSortMode:
+      groupSortMode === "alphabetical"
+        ? "alphabetical"
+        : "creation"
+  };
+}
+
+function findMatchingRule(
+  url,
+  groups
+) {
   if (!url) {
     return null;
   }
 
   for (const group of groups) {
-    if (!group?.name || !group?.pattern) {
+    if (
+      !group?.name ||
+      !group?.pattern
+    ) {
       continue;
     }
 
-    if (wildcardMatch(url, group.pattern)) {
+    if (
+      wildcardMatch(
+        url,
+        group.pattern
+      )
+    ) {
       return group;
     }
   }
@@ -119,36 +282,39 @@ function findMatchingRule(url, groups) {
 // -----------------------------------------------------------------------------
 // Per-window operation queue
 // -----------------------------------------------------------------------------
-//
-// tabs.onUpdated can fire several times in quick succession.
-//
-// Without serialization, two handlers can both:
-//   - see that a group doesn't exist
-//   - create it
-//
-// producing duplicate groups or conflicting tab moves.
-//
-// Operations are serialized only within the same Firefox window.
-// Different windows can still be processed independently.
 
-const windowQueues = new Map();
+const windowQueues =
+  new Map();
 
-function enqueueWindowOperation(windowId, operation) {
+function enqueueWindowOperation(
+  windowId,
+  operation
+) {
   const previous =
-    windowQueues.get(windowId) || Promise.resolve();
+    windowQueues.get(windowId) ||
+    Promise.resolve();
 
-  const next = previous
-    .catch(() => {
-      // Prevent one failed operation from permanently breaking the queue.
-    })
-    .then(operation)
-    .finally(() => {
-      if (windowQueues.get(windowId) === next) {
-        windowQueues.delete(windowId);
-      }
-    });
+  const next =
+    previous
+      .catch(() => {
+        // A failed operation should not poison the queue.
+      })
+      .then(operation)
+      .finally(() => {
+        if (
+          windowQueues.get(windowId) ===
+          next
+        ) {
+          windowQueues.delete(
+            windowId
+          );
+        }
+      });
 
-  windowQueues.set(windowId, next);
+  windowQueues.set(
+    windowId,
+    next
+  );
 
   return next;
 }
@@ -157,7 +323,10 @@ function enqueueWindowOperation(windowId, operation) {
 // Group lookup
 // -----------------------------------------------------------------------------
 
-async function findGroups(windowId, title) {
+async function findGroups(
+  windowId,
+  title
+) {
   try {
     return await browser.tabGroups.query({
       windowId,
@@ -173,16 +342,28 @@ async function findGroups(windowId, title) {
   }
 }
 
-async function findGroup(windowId, title) {
-  const groups = await findGroups(windowId, title);
+async function findGroup(
+  windowId,
+  title
+) {
+  const groups =
+    await findGroups(
+      windowId,
+      title
+    );
 
   return groups.length > 0
     ? groups[0]
     : null;
 }
 
-async function updateGroupAppearance(group, title, color) {
-  const normalizedColor = normalizeColor(color);
+async function updateGroupAppearance(
+  group,
+  title,
+  color
+) {
+  const normalizedColor =
+    normalizeColor(color);
 
   const needsUpdate =
     group.title !== title ||
@@ -193,10 +374,13 @@ async function updateGroupAppearance(group, title, color) {
   }
 
   try {
-    return await browser.tabGroups.update(group.id, {
-      title,
-      color: normalizedColor
-    });
+    return await browser.tabGroups.update(
+      group.id,
+      {
+        title,
+        color: normalizedColor
+      }
+    );
   } catch (error) {
     console.warn(
       `Could not update group "${title}" (${group.id}):`,
@@ -208,7 +392,7 @@ async function updateGroupAppearance(group, title, color) {
 }
 
 // -----------------------------------------------------------------------------
-// Group tabs
+// Ensure tabs are in target group
 // -----------------------------------------------------------------------------
 
 async function ensureTabsInGroup(
@@ -217,33 +401,50 @@ async function ensureTabsInGroup(
   color,
   tabs
 ) {
-  if (!tabs || tabs.length === 0) {
+  if (
+    !tabs ||
+    tabs.length === 0
+  ) {
     return null;
   }
 
-  // Defensive check: never mix tabs from multiple Firefox windows.
-  const windowTabs = tabs.filter(
-    tab =>
-      tab?.id != null &&
-      tab.windowId === windowId
-  );
+  const windowTabs =
+    tabs.filter(
+      tab =>
+        tab?.id != null &&
+        tab.windowId === windowId
+    );
 
-  if (windowTabs.length === 0) {
+  if (
+    windowTabs.length === 0
+  ) {
     return null;
   }
 
-  let group = await findGroup(windowId, groupName);
+  let group =
+    await findGroup(
+      windowId,
+      groupName
+    );
 
   if (!group) {
     try {
-      const groupId = await browser.tabs.group({
-        tabIds: windowTabs.map(tab => tab.id),
-        createProperties: {
-          windowId
-        }
-      });
+      const groupId =
+        await browser.tabs.group({
+          tabIds:
+            windowTabs.map(
+              tab => tab.id
+            ),
 
-      group = await browser.tabGroups.get(groupId);
+          createProperties: {
+            windowId
+          }
+        });
+
+      group =
+        await browser.tabGroups.get(
+          groupId
+        );
 
       console.debug(
         `Created group "${groupName}" in window ${windowId}`,
@@ -258,19 +459,23 @@ async function ensureTabsInGroup(
       return null;
     }
   } else {
-    // Avoid unnecessary tabs.group() calls.
-    //
-    // tabs.group() can move tabs because tabs inside a group have to stay
-    // adjacent. Calling it repeatedly on an already-correct tab is unnecessary.
-    const tabsToMove = windowTabs.filter(
-      tab => tab.groupId !== group.id
-    );
+    const tabsToMove =
+      windowTabs.filter(
+        tab =>
+          tab.groupId !== group.id
+      );
 
-    if (tabsToMove.length > 0) {
+    if (
+      tabsToMove.length > 0
+    ) {
       try {
         await browser.tabs.group({
           groupId: group.id,
-          tabIds: tabsToMove.map(tab => tab.id)
+
+          tabIds:
+            tabsToMove.map(
+              tab => tab.id
+            )
         });
 
         console.debug(
@@ -296,36 +501,350 @@ async function ensureTabsInGroup(
 }
 
 // -----------------------------------------------------------------------------
-// Process one tab
+// Group sorting
 // -----------------------------------------------------------------------------
 
-async function applyRuleToTab(tabId) {
-  let tab;
+async function sortGroupsInWindow(
+  windowId
+) {
+  const {
+    groups: rules,
+    groupUnmatched,
+    groupSortMode
+  } =
+    await getSettings();
+
+  let actualGroups;
 
   try {
-    tab = await browser.tabs.get(tabId);
-  } catch {
-    // Tab may have been closed before the queued operation ran.
+    actualGroups =
+      await browser.tabGroups.query({
+        windowId
+      });
+  } catch (error) {
+    console.error(
+      `Could not query groups for window ${windowId}:`,
+      error
+    );
+
     return;
   }
 
-  if (!tab?.url || tab.id == null) {
+  if (
+    actualGroups.length < 2
+  ) {
+    return;
+  }
+
+  const ruleByName =
+    new Map();
+
+  rules.forEach(
+    (rule, index) => {
+      ruleByName.set(
+        normalizeGroupName(
+          rule.name
+        ),
+        {
+          rule,
+          index
+        }
+      );
+    }
+  );
+
+  // Only groups managed by this extension participate.
+  const managedGroups =
+    actualGroups.filter(
+      group => {
+        if (
+          ruleByName.has(
+            normalizeGroupName(
+              group.title
+            )
+          )
+        ) {
+          return true;
+        }
+
+        return (
+          groupUnmatched &&
+          normalizeGroupName(
+            group.title
+          ) ===
+            normalizeGroupName(
+              UNMATCHED_GROUP_NAME
+            )
+        );
+      }
+    );
+
+  if (
+    managedGroups.length < 2
+  ) {
+    return;
+  }
+
+  if (
+    groupSortMode ===
+    "alphabetical"
+  ) {
+    managedGroups.sort(
+      (a, b) =>
+        compareGroupNames(
+          a.title,
+          b.title
+        )
+    );
+  } else {
+    managedGroups.sort(
+      (a, b) => {
+        const aRule =
+          ruleByName.get(
+            normalizeGroupName(
+              a.title
+            )
+          );
+
+        const bRule =
+          ruleByName.get(
+            normalizeGroupName(
+              b.title
+            )
+          );
+
+        // "etc" is synthetic. Keep it after
+        // explicitly-created rules in creation mode.
+        const aOrder =
+          normalizeGroupName(
+            a.title
+          ) ===
+          normalizeGroupName(
+            UNMATCHED_GROUP_NAME
+          )
+            ? Number.MAX_SAFE_INTEGER
+            : (
+                aRule?.rule
+                  ?.createdOrder ??
+                aRule?.index ??
+                Number.MAX_SAFE_INTEGER
+              );
+
+        const bOrder =
+          normalizeGroupName(
+            b.title
+          ) ===
+          normalizeGroupName(
+            UNMATCHED_GROUP_NAME
+          )
+            ? Number.MAX_SAFE_INTEGER
+            : (
+                bRule?.rule
+                  ?.createdOrder ??
+                bRule?.index ??
+                Number.MAX_SAFE_INTEGER
+              );
+
+        if (
+          aOrder !== bOrder
+        ) {
+          return aOrder - bOrder;
+        }
+
+        return compareGroupNames(
+          a.title,
+          b.title
+        );
+      }
+    );
+  }
+
+  let tabs;
+
+  try {
+    tabs =
+      await browser.tabs.query({
+        windowId
+      });
+  } catch (error) {
+    console.error(
+      `Could not query tabs for sorting in window ${windowId}:`,
+      error
+    );
+
+    return;
+  }
+
+  const managedIds =
+    new Set(
+      managedGroups.map(
+        group => group.id
+      )
+    );
+
+  const managedTabs =
+    tabs.filter(
+      tab =>
+        managedIds.has(
+          tab.groupId
+        )
+    );
+
+  if (
+    managedTabs.length === 0
+  ) {
+    return;
+  }
+
+  let targetIndex =
+    Math.min(
+      ...managedTabs.map(
+        tab => tab.index
+      )
+    );
+
+  for (
+    const group of managedGroups
+  ) {
+    let groupTabs;
+
+    try {
+      groupTabs =
+        await browser.tabs.query({
+          groupId: group.id
+        });
+    } catch (error) {
+      console.warn(
+        `Could not query tabs for group ${group.id}:`,
+        error
+      );
+
+      continue;
+    }
+
+    if (
+      groupTabs.length === 0
+    ) {
+      continue;
+    }
+
+    groupTabs.sort(
+      (a, b) =>
+        a.index - b.index
+    );
+
+    const currentIndex =
+      groupTabs[0].index;
+
+    if (
+      currentIndex !== targetIndex
+    ) {
+      try {
+        await browser.tabGroups.move(
+          group.id,
+          {
+            index: targetIndex
+          }
+        );
+      } catch (error) {
+        console.warn(
+          `Could not move group "${group.title}":`,
+          error
+        );
+      }
+    }
+
+    targetIndex +=
+      groupTabs.length;
+  }
+}
+
+async function sortAllGroups() {
+  let tabs;
+
+  try {
+    tabs =
+      await browser.tabs.query({});
+  } catch (error) {
+    console.error(
+      "Could not query tabs:",
+      error
+    );
+
+    return;
+  }
+
+  const windowIds = [
+    ...new Set(
+      tabs
+        .map(
+          tab => tab.windowId
+        )
+        .filter(
+          windowId =>
+            windowId != null
+        )
+    )
+  ];
+
+  await Promise.all(
+    windowIds.map(
+      windowId =>
+        enqueueWindowOperation(
+          windowId,
+          () =>
+            sortGroupsInWindow(
+              windowId
+            )
+        )
+    )
+  );
+}
+
+// -----------------------------------------------------------------------------
+// Process one tab
+// -----------------------------------------------------------------------------
+
+async function applyRuleToTab(
+  tabId
+) {
+  let tab;
+
+  try {
+    tab =
+      await browser.tabs.get(
+        tabId
+      );
+  } catch {
+    // Tab may have been closed before its queued task ran.
+    return;
+  }
+
+  if (
+    !tab?.url ||
+    tab.id == null
+  ) {
     return;
   }
 
   const {
     groups,
     groupUnmatched
-  } = await getSettings();
+  } =
+    await getSettings();
 
   const matchedGroup =
-    findMatchingRule(tab.url, groups);
+    findMatchingRule(
+      tab.url,
+      groups
+    );
 
   if (matchedGroup) {
     await ensureTabsInGroup(
       tab.windowId,
       matchedGroup.name,
-      matchedGroup.color || "blue",
+      matchedGroup.color ||
+        "blue",
       [tab]
     );
 
@@ -345,10 +864,13 @@ async function applyRuleToTab(tabId) {
 
   if (
     tab.groupId != null &&
-    tab.groupId !== UNGROUPED_ID
+    tab.groupId !==
+      UNGROUPED_ID
   ) {
     try {
-      await browser.tabs.ungroup(tab.id);
+      await browser.tabs.ungroup(
+        [tab.id]
+      );
     } catch (error) {
       console.warn(
         `Could not ungroup tab ${tab.id}:`,
@@ -359,21 +881,25 @@ async function applyRuleToTab(tabId) {
 }
 
 // -----------------------------------------------------------------------------
-// Reconcile a complete Firefox window
+// Reconcile a complete window
 // -----------------------------------------------------------------------------
 
-async function reconcileWindow(windowId) {
+async function reconcileWindow(
+  windowId
+) {
   const {
     groups,
     groupUnmatched
-  } = await getSettings();
+  } =
+    await getSettings();
 
   let tabs;
 
   try {
-    tabs = await browser.tabs.query({
-      windowId
-    });
+    tabs =
+      await browser.tabs.query({
+        windowId
+      });
   } catch (error) {
     console.error(
       `Could not query tabs for window ${windowId}:`,
@@ -383,37 +909,48 @@ async function reconcileWindow(windowId) {
     return;
   }
 
-  // Map:
-  //
-  // group name ->
-  // {
-  //   color,
-  //   tabs[]
-  // }
-  //
-  // First matching rule wins, preserving original behaviour.
-  const targetGroups = new Map();
+  const targetGroups =
+    new Map();
 
   const unmatchedTabs = [];
 
   for (const tab of tabs) {
-    if (!tab.url || tab.id == null) {
+    if (
+      !tab.url ||
+      tab.id == null
+    ) {
       continue;
     }
 
     const matchedGroup =
-      findMatchingRule(tab.url, groups);
+      findMatchingRule(
+        tab.url,
+        groups
+      );
 
     if (!matchedGroup) {
-      unmatchedTabs.push(tab);
+      unmatchedTabs.push(
+        tab
+      );
+
       continue;
     }
 
-    if (!targetGroups.has(matchedGroup.name)) {
-      targetGroups.set(matchedGroup.name, {
-        color: matchedGroup.color || "blue",
-        tabs: []
-      });
+    if (
+      !targetGroups.has(
+        matchedGroup.name
+      )
+    ) {
+      targetGroups.set(
+        matchedGroup.name,
+        {
+          color:
+            matchedGroup.color ||
+            "blue",
+
+          tabs: []
+        }
+      );
     }
 
     targetGroups
@@ -422,8 +959,12 @@ async function reconcileWindow(windowId) {
       .push(tab);
   }
 
-  // Process configured groups.
-  for (const [groupName, target] of targetGroups) {
+  for (
+    const [
+      groupName,
+      target
+    ] of targetGroups
+  ) {
     await ensureTabsInGroup(
       windowId,
       groupName,
@@ -433,7 +974,9 @@ async function reconcileWindow(windowId) {
   }
 
   if (groupUnmatched) {
-    if (unmatchedTabs.length > 0) {
+    if (
+      unmatchedTabs.length > 0
+    ) {
       await ensureTabsInGroup(
         windowId,
         UNMATCHED_GROUP_NAME,
@@ -442,15 +985,21 @@ async function reconcileWindow(windowId) {
       );
     }
   } else {
-    const tabsToUngroup = unmatchedTabs
-      .filter(
-        tab =>
-          tab.groupId != null &&
-          tab.groupId !== UNGROUPED_ID
-      )
-      .map(tab => tab.id);
+    const tabsToUngroup =
+      unmatchedTabs
+        .filter(
+          tab =>
+            tab.groupId != null &&
+            tab.groupId !==
+              UNGROUPED_ID
+        )
+        .map(
+          tab => tab.id
+        );
 
-    if (tabsToUngroup.length > 0) {
+    if (
+      tabsToUngroup.length > 0
+    ) {
       try {
         await browser.tabs.ungroup(
           tabsToUngroup
@@ -463,6 +1012,10 @@ async function reconcileWindow(windowId) {
       }
     }
   }
+
+  await sortGroupsInWindow(
+    windowId
+  );
 }
 
 // -----------------------------------------------------------------------------
@@ -473,7 +1026,8 @@ async function applyRulesToAllTabs() {
   let tabs;
 
   try {
-    tabs = await browser.tabs.query({});
+    tabs =
+      await browser.tabs.query({});
   } catch (error) {
     console.error(
       "Could not query tabs:",
@@ -486,38 +1040,45 @@ async function applyRulesToAllTabs() {
   const windowIds = [
     ...new Set(
       tabs
-        .map(tab => tab.windowId)
-        .filter(windowId => windowId != null)
+        .map(
+          tab => tab.windowId
+        )
+        .filter(
+          windowId =>
+            windowId != null
+        )
     )
   ];
 
   await Promise.all(
-    windowIds.map(windowId =>
-      enqueueWindowOperation(
-        windowId,
-        () => reconcileWindow(windowId)
-      )
+    windowIds.map(
+      windowId =>
+        enqueueWindowOperation(
+          windowId,
+          () =>
+            reconcileWindow(
+              windowId
+            )
+        )
     )
   );
 }
 
 // -----------------------------------------------------------------------------
-// Update color
+// Update group color
 // -----------------------------------------------------------------------------
 
 async function updateGroupColor(
   groupName,
   newColor
 ) {
-  const normalizedColor =
-    normalizeColor(newColor);
-
   let groups;
 
   try {
-    groups = await browser.tabGroups.query({
-      title: groupName
-    });
+    groups =
+      await browser.tabGroups.query({
+        title: groupName
+      });
   } catch (error) {
     console.error(
       `Could not find groups named "${groupName}":`,
@@ -527,27 +1088,34 @@ async function updateGroupColor(
     return;
   }
 
+  const color =
+    normalizeColor(
+      newColor
+    );
+
   await Promise.all(
-    groups.map(async group => {
-      try {
-        await browser.tabGroups.update(
-          group.id,
-          {
-            color: normalizedColor
-          }
-        );
-      } catch (error) {
-        console.warn(
-          `Could not update color of group ${group.id}:`,
-          error
-        );
+    groups.map(
+      async group => {
+        try {
+          await browser.tabGroups.update(
+            group.id,
+            {
+              color
+            }
+          );
+        } catch (error) {
+          console.warn(
+            `Could not update color of group ${group.id}:`,
+            error
+          );
+        }
       }
-    })
+    )
   );
 }
 
 // -----------------------------------------------------------------------------
-// Ungroup tabs that no longer match an edited pattern
+// Ungroup tabs no longer matching a modified rule
 // -----------------------------------------------------------------------------
 
 async function ungroupMismatchedTabs(
@@ -571,59 +1139,70 @@ async function ungroupMismatchedTabs(
   }
 
   await Promise.all(
-    matchingGroups.map(group =>
-      enqueueWindowOperation(
-        group.windowId,
-        async () => {
-          let tabs;
+    matchingGroups.map(
+      group =>
+        enqueueWindowOperation(
+          group.windowId,
+          async () => {
+            let tabs;
 
-          try {
-            tabs = await browser.tabs.query({
-              groupId: group.id
-            });
-          } catch (error) {
-            console.warn(
-              `Could not query tabs for group ${group.id}:`,
-              error
-            );
+            try {
+              tabs =
+                await browser.tabs.query({
+                  groupId:
+                    group.id
+                });
+            } catch (error) {
+              console.warn(
+                `Could not query tabs for group ${group.id}:`,
+                error
+              );
 
-            return;
-          }
+              return;
+            }
 
-          const tabsToUngroup = tabs
-            .filter(
-              tab =>
-                !tab.url ||
-                !wildcardMatch(
-                  tab.url,
-                  newPattern
+            const tabsToUngroup =
+              tabs
+                .filter(
+                  tab =>
+                    !tab.url ||
+                    !wildcardMatch(
+                      tab.url,
+                      newPattern
+                    )
                 )
-            )
-            .map(tab => tab.id)
-            .filter(id => id != null);
+                .map(
+                  tab => tab.id
+                )
+                .filter(
+                  id => id != null
+                );
 
-          if (tabsToUngroup.length === 0) {
-            return;
-          }
+            if (
+              tabsToUngroup.length ===
+              0
+            ) {
+              return;
+            }
 
-          try {
-            await browser.tabs.ungroup(
-              tabsToUngroup
-            );
-          } catch (error) {
-            console.error(
-              `Could not ungroup tabs from "${groupName}":`,
-              error
-            );
+            try {
+              await browser.tabs.ungroup(
+                tabsToUngroup
+              );
+            } catch (error) {
+              console.error(
+                `Could not ungroup tabs from "${groupName}":`,
+                error
+              );
+            }
           }
-        }
-      )
+        )
     )
   );
 }
 
 // -----------------------------------------------------------------------------
-// Runtime messages from options/popup
+// Runtime messages
 // -----------------------------------------------------------------------------
 
 browser.runtime.onMessage.addListener(
@@ -676,30 +1255,55 @@ browser.runtime.onMessage.addListener(
         }));
     }
 
+    if (
+      message.action ===
+      "sortAllGroups"
+    ) {
+      return sortAllGroups()
+        .then(() => ({
+          success: true
+        }))
+        .catch(error => ({
+          success: false,
+          error: String(error)
+        }));
+    }
+
     return undefined;
   }
 );
 
 // -----------------------------------------------------------------------------
-// Handle URL changes
+// URL changes
 // -----------------------------------------------------------------------------
 
 browser.tabs.onUpdated.addListener(
-  (tabId, changeInfo, tab) => {
-    // Ignore groupId/title/favicon/etc updates.
-    //
-    // We only need to reconsider grouping when the URL changes.
+  (
+    tabId,
+    changeInfo,
+    tab
+  ) => {
     if (!changeInfo.url) {
       return;
     }
 
-    if (tab.windowId == null) {
+    if (
+      tab.windowId == null
+    ) {
       return;
     }
 
     enqueueWindowOperation(
       tab.windowId,
-      () => applyRuleToTab(tabId)
+      async () => {
+        await applyRuleToTab(
+          tabId
+        );
+
+        await sortGroupsInWindow(
+          tab.windowId
+        );
+      }
     ).catch(error => {
       console.error(
         `Could not process updated tab ${tabId}:`,
@@ -710,28 +1314,22 @@ browser.tabs.onUpdated.addListener(
 );
 
 // -----------------------------------------------------------------------------
-// Legacy migration
+// Initialization
 // -----------------------------------------------------------------------------
-//
-// Old versions persisted:
-//
-//   groupMap[groupName] = groupId
-//
-// Firefox explicitly does not guarantee that a restored group keeps the same
-// groupId across browser sessions.
-//
-// Remove the obsolete cache. Groups are now always looked up using
-// windowId + title.
 
-browser.storage.local
-  .remove("groupMap")
-  .catch(error => {
-    console.warn(
-      "Could not remove legacy groupMap:",
-      error
-    );
-  });
+async function initialize() {
+  await migrateStorage();
 
-console.log(
-  "Auto Group Tabs background initialized"
-);
+  await applyRulesToAllTabs();
+
+  console.log(
+    "Auto Group Tabs background initialized"
+  );
+}
+
+initialize().catch(error => {
+  console.error(
+    "Auto Group Tabs initialization failed:",
+    error
+  );
+});
