@@ -1,100 +1,200 @@
 // Auto Group Tabs - Options page
 
-const EXPORT_SCHEMA = "auto-group-tabs";
-const EXPORT_VERSION = 1;
-const MAX_IMPORT_FILE_SIZE = 1024 * 1024; // 1 MB
+const EXPORT_SCHEMA =
+  "auto-group-tabs";
 
-const STORAGE_COLORS = new Set([
-  "blue",
-  "yellow",
-  "red",
-  "green",
-  "purple",
-  "orange",
-  "pink",
-  "cyan",
-  "gray"
-]);
+const EXPORT_VERSION = 2;
+
+const MAX_IMPORT_FILE_SIZE =
+  1024 * 1024;
+
+const STORAGE_COLORS =
+  new Set([
+    "blue",
+    "yellow",
+    "red",
+    "green",
+    "purple",
+    "orange",
+    "pink",
+    "cyan",
+    "gray"
+  ]);
 
 // -----------------------------------------------------------------------------
-// Existing settings / rule editor
+// Rule form
 // -----------------------------------------------------------------------------
 
 document
-  .getElementById("groupForm")
-  .addEventListener("submit", (event) => {
-    handleFormSubmit(event, "groupList");
-  });
+  .getElementById(
+    "groupForm"
+  )
+  .addEventListener(
+    "submit",
+    event => {
+      handleFormSubmit(
+        event,
+        "groupList"
+      );
+    }
+  );
 
 document
-  .getElementById("cancelBtn")
-  .addEventListener("click", cancelEdit);
+  .getElementById(
+    "cancelBtn"
+  )
+  .addEventListener(
+    "click",
+    cancelEdit
+  );
+
+// -----------------------------------------------------------------------------
+// Settings
+// -----------------------------------------------------------------------------
 
 async function loadSettings() {
   const {
-    groupUnmatched = true
-  } = await browser.storage.local.get("groupUnmatched");
+    groupUnmatched = true,
+    groupSortMode = "creation"
+  } =
+    await browser.storage.local.get([
+      "groupUnmatched",
+      "groupSortMode"
+    ]);
 
   document.getElementById(
     "groupUnmatched"
-  ).checked = groupUnmatched;
+  ).checked =
+    groupUnmatched;
+
+  document.getElementById(
+    "groupSortMode"
+  ).value =
+    groupSortMode ===
+    "alphabetical"
+      ? "alphabetical"
+      : "creation";
 }
 
 document
-  .getElementById("groupUnmatched")
-  .addEventListener("change", async (event) => {
-    const groupUnmatched = event.target.checked;
+  .getElementById(
+    "groupUnmatched"
+  )
+  .addEventListener(
+    "change",
+    async event => {
+      const groupUnmatched =
+        event.target.checked;
 
-    await browser.storage.local.set({
-      groupUnmatched
-    });
+      await browser.storage.local.set({
+        groupUnmatched
+      });
 
-    await applyRules();
-  });
+      await applyRules();
+    }
+  );
+
+document
+  .getElementById(
+    "groupSortMode"
+  )
+  .addEventListener(
+    "change",
+    async event => {
+      const groupSortMode =
+        event.target.value ===
+        "alphabetical"
+          ? "alphabetical"
+          : "creation";
+
+      await browser.storage.local.set({
+        groupSortMode
+      });
+
+      await refreshList(
+        "groupList"
+      );
+
+      try {
+        await browser.runtime.sendMessage({
+          action:
+            "sortAllGroups"
+        });
+      } catch (error) {
+        console.error(
+          "Could not sort groups:",
+          error
+        );
+
+        showStatus(
+          "The setting was saved, but open groups could not be reordered.",
+          "error"
+        );
+      }
+    }
+  );
 
 // -----------------------------------------------------------------------------
-// Status
+// Status UI
 // -----------------------------------------------------------------------------
 
-function showStatus(message, type = "info") {
+function showStatus(
+  message,
+  type = "info"
+) {
   const element =
-    document.getElementById("backupStatus");
+    document.getElementById(
+      "backupStatus"
+    );
 
-  element.textContent = message;
-  element.className = `status ${type}`;
+  element.textContent =
+    message;
+
+  element.className =
+    `status ${type}`;
 }
 
 function clearStatus() {
   const element =
-    document.getElementById("backupStatus");
+    document.getElementById(
+      "backupStatus"
+    );
 
   element.textContent = "";
-  element.className = "status";
+  element.className =
+    "status";
 }
 
 // -----------------------------------------------------------------------------
-// Rule validation
+// Import / export validation
 // -----------------------------------------------------------------------------
 
-function normalizeStorageColor(color) {
-  if (typeof color !== "string") {
+function normalizeStorageColor(
+  color
+) {
+  if (
+    typeof color !==
+    "string"
+  ) {
     return "blue";
   }
 
-  const normalized =
-    color.trim().toLowerCase();
+  let normalized =
+    color
+      .trim()
+      .toLowerCase();
 
-  // Firefox's tabGroups API calls this color "grey",
-  // while the existing extension stores it as "gray".
-  if (normalized === "grey") {
-    return "gray";
+  if (
+    normalized === "grey"
+  ) {
+    normalized = "gray";
   }
 
-  if (STORAGE_COLORS.has(normalized)) {
-    return normalized;
-  }
-
-  return "blue";
+  return STORAGE_COLORS.has(
+    normalized
+  )
+    ? normalized
+    : "blue";
 }
 
 function validateAndNormalizeRule(
@@ -112,7 +212,8 @@ function validateAndNormalizeRule(
   }
 
   if (
-    typeof rule.name !== "string" ||
+    typeof rule.name !==
+      "string" ||
     !rule.name.trim()
   ) {
     throw new Error(
@@ -121,7 +222,8 @@ function validateAndNormalizeRule(
   }
 
   if (
-    typeof rule.pattern !== "string" ||
+    typeof rule.pattern !==
+      "string" ||
     !rule.pattern.trim()
   ) {
     throw new Error(
@@ -129,19 +231,45 @@ function validateAndNormalizeRule(
     );
   }
 
-  return {
-    name: rule.name.trim(),
-    pattern: rule.pattern.trim(),
-    color: normalizeStorageColor(rule.color)
+  const result = {
+    name:
+      rule.name.trim(),
+
+    pattern:
+      rule.pattern.trim(),
+
+    color:
+      normalizeStorageColor(
+        rule.color
+      )
   };
+
+  if (
+    Number.isInteger(
+      rule.createdOrder
+    ) &&
+    rule.createdOrder > 0
+  ) {
+    result.createdOrder =
+      rule.createdOrder;
+  }
+
+  return result;
 }
 
-function validateRuleNames(groups) {
-  const seen = new Set();
+function validateRuleNames(
+  groups
+) {
+  const seen =
+    new Set();
 
-  for (const rule of groups) {
+  for (
+    const rule of groups
+  ) {
     const key =
-      rule.name.trim().toLowerCase();
+      rule.name
+        .trim()
+        .toLowerCase();
 
     if (seen.has(key)) {
       throw new Error(
@@ -161,30 +289,50 @@ async function exportRules() {
   clearStatus();
 
   try {
+    const groups =
+      await getGroupsWithCreatedOrder();
+
     const {
-      groups = [],
-      groupUnmatched = true
-    } = await browser.storage.local.get([
-      "groups",
-      "groupUnmatched"
-    ]);
+      groupUnmatched = true,
+      groupSortMode = "creation"
+    } =
+      await browser.storage.local.get([
+        "groupUnmatched",
+        "groupSortMode"
+      ]);
 
     const normalizedGroups =
-      groups.map((rule, index) =>
-        validateAndNormalizeRule(
-          rule,
-          index
-        )
+      groups.map(
+        (rule, index) =>
+          validateAndNormalizeRule(
+            rule,
+            index
+          )
       );
 
     const backup = {
-      schema: EXPORT_SCHEMA,
-      version: EXPORT_VERSION,
-      exportedAt: new Date().toISOString(),
+      schema:
+        EXPORT_SCHEMA,
+
+      version:
+        EXPORT_VERSION,
+
+      exportedAt:
+        new Date()
+          .toISOString(),
+
       settings: {
-        groupUnmatched
+        groupUnmatched,
+
+        groupSortMode:
+          groupSortMode ===
+          "alphabetical"
+            ? "alphabetical"
+            : "creation"
       },
-      groups: normalizedGroups
+
+      groups:
+        normalizedGroups
     };
 
     const json =
@@ -198,36 +346,53 @@ async function exportRules() {
       new Blob(
         [json],
         {
-          type: "application/json"
+          type:
+            "application/json"
         }
       );
 
     const objectUrl =
-      URL.createObjectURL(blob);
+      URL.createObjectURL(
+        blob
+      );
 
-    const date =
+    const timestamp =
       new Date()
         .toISOString()
-        .slice(0, 10);
+        .replace(
+          /[:.]/g,
+          "-"
+        );
 
     const filename =
-      `auto-group-tabs-rules-${date}.json`;
+      `auto-group-tabs-rules-${timestamp}.json`;
 
     const anchor =
-      document.createElement("a");
+      document.createElement(
+        "a"
+      );
 
-    anchor.href = objectUrl;
-    anchor.download = filename;
+    anchor.href =
+      objectUrl;
 
-    document.body.appendChild(anchor);
+    anchor.download =
+      filename;
+
+    document.body.appendChild(
+      anchor
+    );
+
     anchor.click();
     anchor.remove();
 
-    // Firefox needs the object URL long enough
-    // for the download to start.
-    setTimeout(() => {
-      URL.revokeObjectURL(objectUrl);
-    }, 1000);
+    setTimeout(
+      () => {
+        URL.revokeObjectURL(
+          objectUrl
+        );
+      },
+      1000
+    );
 
     showStatus(
       `Exported ${normalizedGroups.length} rule(s).`,
@@ -247,42 +412,19 @@ async function exportRules() {
 }
 
 // -----------------------------------------------------------------------------
-// Import parsing
+// Backup parser
 // -----------------------------------------------------------------------------
 
-function parseBackupPayload(data) {
-  /*
-   * Supported formats:
-   *
-   * Current:
-   *
-   * {
-   *   "schema": "auto-group-tabs",
-   *   "version": 1,
-   *   "settings": {
-   *     "groupUnmatched": true
-   *   },
-   *   "groups": [...]
-   * }
-   *
-   * Earlier/simple format:
-   *
-   * {
-   *   "version": 1,
-   *   "groupUnmatched": true,
-   *   "groups": [...]
-   * }
-   *
-   * Also accepts a raw array of rules:
-   *
-   * [
-   *   { "name": "...", "pattern": "...", "color": "..." }
-   * ]
-   */
-
+function parseBackupPayload(
+  data
+) {
   let rawGroups;
+
   let importedGroupUnmatched;
 
+  let importedGroupSortMode;
+
+  // Raw array compatibility.
   if (Array.isArray(data)) {
     rawGroups = data;
   } else if (
@@ -291,7 +433,8 @@ function parseBackupPayload(data) {
   ) {
     if (
       data.schema &&
-      data.schema !== EXPORT_SCHEMA
+      data.schema !==
+        EXPORT_SCHEMA
     ) {
       throw new Error(
         `Unsupported backup schema: ${data.schema}`
@@ -300,7 +443,8 @@ function parseBackupPayload(data) {
 
     if (
       data.version != null &&
-      data.version > EXPORT_VERSION
+      data.version >
+        EXPORT_VERSION
     ) {
       throw new Error(
         `This backup uses version ${data.version}. ` +
@@ -308,24 +452,47 @@ function parseBackupPayload(data) {
       );
     }
 
-    rawGroups = data.groups;
+    rawGroups =
+      data.groups;
 
     if (
       data.settings &&
-      typeof data.settings.groupUnmatched === "boolean"
+      typeof data.settings
+        .groupUnmatched ===
+        "boolean"
     ) {
       importedGroupUnmatched =
-        data.settings.groupUnmatched;
+        data.settings
+          .groupUnmatched;
     } else if (
-      typeof data.groupUnmatched === "boolean"
+      typeof data.groupUnmatched ===
+      "boolean"
     ) {
-      // Compatibility with the simple format.
       importedGroupUnmatched =
         data.groupUnmatched;
     }
+
+    const sortMode =
+      data.settings
+        ?.groupSortMode ??
+      data.groupSortMode;
+
+    if (
+      sortMode ===
+        "creation" ||
+      sortMode ===
+        "alphabetical"
+    ) {
+      importedGroupSortMode =
+        sortMode;
+    }
   }
 
-  if (!Array.isArray(rawGroups)) {
+  if (
+    !Array.isArray(
+      rawGroups
+    )
+  ) {
     throw new Error(
       'The backup does not contain a valid "groups" array.'
     );
@@ -340,12 +507,16 @@ function parseBackupPayload(data) {
         )
     );
 
-  validateRuleNames(groups);
+  validateRuleNames(
+    groups
+  );
 
   return {
     groups,
     groupUnmatched:
-      importedGroupUnmatched
+      importedGroupUnmatched,
+    groupSortMode:
+      importedGroupSortMode
   };
 }
 
@@ -357,13 +528,22 @@ function mergeGroups(
   existingGroups,
   importedGroups
 ) {
+  const existingNormalized =
+    normalizeCreatedOrders(
+      existingGroups.map(
+        (rule, index) =>
+          validateAndNormalizeRule(
+            rule,
+            index
+          )
+      )
+    ).groups;
+
   const result =
-    existingGroups.map(
-      (rule, index) =>
-        validateAndNormalizeRule(
-          rule,
-          index
-        )
+    existingNormalized.map(
+      rule => ({
+        ...rule
+      })
     );
 
   const indexByName =
@@ -372,30 +552,50 @@ function mergeGroups(
   result.forEach(
     (rule, index) => {
       indexByName.set(
-        rule.name.toLowerCase(),
+        rule.name
+          .toLowerCase(),
         index
       );
     }
   );
 
-  for (const importedRule of importedGroups) {
+  let nextCreatedOrder =
+    getNextCreatedOrder(
+      result
+    );
+
+  for (
+    const importedRule of
+    importedGroups
+  ) {
     const key =
-      importedRule.name.toLowerCase();
+      importedRule.name
+        .toLowerCase();
 
     const existingIndex =
       indexByName.get(key);
 
-    if (existingIndex == null) {
+    if (
+      existingIndex != null
+    ) {
+      // For merge, preserve local creation position.
+      result[existingIndex] = {
+        ...importedRule,
+        createdOrder:
+          result[existingIndex]
+            .createdOrder
+      };
+    } else {
+      result.push({
+        ...importedRule,
+        createdOrder:
+          nextCreatedOrder++
+      });
+
       indexByName.set(
         key,
-        result.length
+        result.length - 1
       );
-
-      result.push(importedRule);
-    } else {
-      // Imported version wins.
-      result[existingIndex] =
-        importedRule;
     }
   }
 
@@ -410,11 +610,14 @@ function getImportMode() {
   return (
     document.querySelector(
       'input[name="importMode"]:checked'
-    )?.value || "replace"
+    )?.value ||
+    "replace"
   );
 }
 
-async function importRules(file) {
+async function importRules(
+  file
+) {
   clearStatus();
 
   if (!file) {
@@ -449,20 +652,20 @@ async function importRules(file) {
     }
 
     const imported =
-      parseBackupPayload(data);
+      parseBackupPayload(
+        data
+      );
 
     const mode =
       getImportMode();
 
     let finalGroups;
 
-    if (mode === "merge") {
-      const {
-        groups: existingGroups = []
-      } =
-        await browser.storage.local.get(
-          "groups"
-        );
+    if (
+      mode === "merge"
+    ) {
+      const existingGroups =
+        await getGroupsWithCreatedOrder();
 
       finalGroups =
         mergeGroups(
@@ -471,44 +674,63 @@ async function importRules(file) {
         );
     } else {
       finalGroups =
-        imported.groups;
+        normalizeCreatedOrders(
+          imported.groups
+        ).groups;
     }
 
     const storageUpdate = {
-      groups: finalGroups
+      groups:
+        finalGroups
     };
 
     if (
-      typeof imported.groupUnmatched ===
+      typeof imported
+        .groupUnmatched ===
       "boolean"
     ) {
       storageUpdate.groupUnmatched =
         imported.groupUnmatched;
     }
 
+    if (
+      imported.groupSortMode ===
+        "creation" ||
+      imported.groupSortMode ===
+        "alphabetical"
+    ) {
+      storageUpdate.groupSortMode =
+        imported.groupSortMode;
+    }
+
     await browser.storage.local.set(
       storageUpdate
     );
 
-    /*
-     * Never restore groupMap.
-     *
-     * Old versions of the extension persisted Firefox group IDs.
-     * Those IDs aren't stable browser state and shouldn't be
-     * transferred in a backup.
-     */
+    // Never restore old transient group IDs.
     await browser.storage.local.remove(
       "groupMap"
     );
 
     await loadSettings();
-    await refreshList("groupList");
-    await applyRules();
 
-    if (mode === "merge") {
+    await refreshList(
+      "groupList"
+    );
+
+    const applied =
+      await applyRules();
+
+    if (!applied) {
+      return;
+    }
+
+    if (
+      mode === "merge"
+    ) {
       showStatus(
         `Import complete. ${imported.groups.length} rule(s) imported, ` +
-        `${finalGroups.length} rule(s) now configured.`,
+          `${finalGroups.length} rule(s) now configured.`,
         "success"
       );
     } else {
@@ -531,19 +753,28 @@ async function importRules(file) {
 }
 
 // -----------------------------------------------------------------------------
-// Reapply grouping
+// Apply rules
 // -----------------------------------------------------------------------------
 
 async function applyRules() {
   try {
-    await browser.runtime.sendMessage({
-      action: "applyRulesToAllTabs"
-    });
+    const response =
+      await browser.runtime.sendMessage({
+        action:
+          "applyRulesToAllTabs"
+      });
+
+    if (
+      response?.success === false
+    ) {
+      throw new Error(
+        response.error ||
+          "Unknown background error"
+      );
+    }
+
+    return true;
   } catch (error) {
-    /*
-     * Storage has already been saved, so don't roll back the import.
-     * Show the error because tabs might not have been reorganized yet.
-     */
     console.error(
       "Rules saved but tabs could not be reorganized:",
       error
@@ -551,47 +782,60 @@ async function applyRules() {
 
     showStatus(
       "Rules were saved, but existing tabs could not be reorganized. " +
-      "Reload the extension and use Apply Rules again.",
+        "Reload the extension and try again.",
       "error"
     );
+
+    return false;
   }
 }
 
 // -----------------------------------------------------------------------------
-// Buttons
+// Backup buttons
 // -----------------------------------------------------------------------------
 
 document
-  .getElementById("exportRules")
+  .getElementById(
+    "exportRules"
+  )
   .addEventListener(
     "click",
     exportRules
   );
 
 document
-  .getElementById("importRules")
+  .getElementById(
+    "importRules"
+  )
   .addEventListener(
     "click",
     () => {
       clearStatus();
 
       document
-        .getElementById("importFile")
+        .getElementById(
+          "importFile"
+        )
         .click();
     }
   );
 
 document
-  .getElementById("importFile")
+  .getElementById(
+    "importFile"
+  )
   .addEventListener(
     "change",
-    async (event) => {
+    async event => {
       const file =
-        event.target.files?.[0];
+        event.target
+          .files?.[0];
 
-      await importRules(file);
+      await importRules(
+        file
+      );
 
-      // Allows selecting the same file again.
+      // Allow selecting the same file again.
       event.target.value = "";
     }
   );
