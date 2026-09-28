@@ -157,7 +157,7 @@ async function getDisplayEntries(
   groups
 ) {
   const {
-    groupSortMode = "creation"
+    groupSortMode = "alphabetical"
   } =
     await browser.storage.local.get(
       "groupSortMode"
@@ -172,8 +172,8 @@ async function getDisplayEntries(
     );
 
   if (
-    groupSortMode ===
-    "alphabetical"
+    groupSortMode !==
+    "creation"
   ) {
     entries.sort(
       (a, b) =>

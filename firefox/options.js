@@ -55,7 +55,7 @@ document
 async function loadSettings() {
   const {
     groupUnmatched = true,
-    groupSortMode = "creation"
+    groupSortMode = "alphabetical"
   } =
     await browser.storage.local.get([
       "groupUnmatched",
@@ -71,9 +71,9 @@ async function loadSettings() {
     "groupSortMode"
   ).value =
     groupSortMode ===
-    "alphabetical"
-      ? "alphabetical"
-      : "creation";
+    "creation"
+      ? "creation"
+      : "alphabetical";
 }
 
 document
@@ -103,9 +103,9 @@ document
     async event => {
       const groupSortMode =
         event.target.value ===
-        "alphabetical"
-          ? "alphabetical"
-          : "creation";
+        "creation"
+          ? "creation"
+          : "alphabetical";
 
       await browser.storage.local.set({
         groupSortMode
@@ -294,7 +294,7 @@ async function exportRules() {
 
     const {
       groupUnmatched = true,
-      groupSortMode = "creation"
+      groupSortMode = "alphabetical"
     } =
       await browser.storage.local.get([
         "groupUnmatched",
@@ -326,9 +326,9 @@ async function exportRules() {
 
         groupSortMode:
           groupSortMode ===
-          "alphabetical"
-            ? "alphabetical"
-            : "creation"
+          "creation"
+            ? "creation"
+            : "alphabetical"
       },
 
       groups:

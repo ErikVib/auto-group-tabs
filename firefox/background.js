@@ -175,7 +175,7 @@ function normalizeCreatedOrders(groups) {
 async function migrateStorage() {
   const {
     groups = [],
-    groupSortMode = "creation"
+    groupSortMode = "alphabetical"
   } =
     await browser.storage.local.get([
       "groups",
@@ -201,7 +201,7 @@ async function migrateStorage() {
     groupSortMode !== "alphabetical"
   ) {
     updates.groupSortMode =
-      "creation";
+      "alphabetical";
   }
 
   if (
@@ -227,7 +227,7 @@ async function getSettings() {
   const {
     groups = [],
     groupUnmatched = true,
-    groupSortMode = "creation"
+    groupSortMode = "alphabetical"
   } =
     await browser.storage.local.get([
       "groups",
@@ -244,9 +244,9 @@ async function getSettings() {
     groupUnmatched,
 
     groupSortMode:
-      groupSortMode === "alphabetical"
-        ? "alphabetical"
-        : "creation"
+      groupSortMode === "creation"
+        ? "creation"
+        : "alphabetical"
   };
 }
 
