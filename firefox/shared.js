@@ -1,210 +1,741 @@
 // Shared utilities and constants
 
 const colorMap = {
-  blue: '#4A90E2',
-  yellow: '#F5A623',
-  red: '#D0021B',
-  green: '#7ED321',
-  purple: '#9013FE',
-  orange: '#F5A623',
-  pink: '#F78DA7',
-  cyan: '#50E3C2',
-  gray: '#9B9B9B'
+  blue: "#4A90E2",
+  yellow: "#F5A623",
+  red: "#D0021B",
+  green: "#7ED321",
+  purple: "#9013FE",
+  orange: "#F5A623",
+  pink: "#F78DA7",
+  cyan: "#50E3C2",
+  gray: "#9B9B9B"
 };
 
-const availableColors = ['blue', 'yellow', 'red', 'green', 'purple', 'orange', 'pink', 'cyan', 'gray'];
+const availableColors = [
+  "blue",
+  "yellow",
+  "red",
+  "green",
+  "purple",
+  "orange",
+  "pink",
+  "cyan",
+  "gray"
+];
 
 let editingIndex = null;
 
-function selectUnusedColor() {
-  browser.storage.local.get("groups").then(({ groups = [] }) => {
-    const usedColors = groups.map(g => g.color);
-    const unusedColor = availableColors.find(color => !usedColors.includes(color));
-    
-    const colorSelect = document.getElementById("color");
-    if (unusedColor && colorSelect) {
-      colorSelect.value = unusedColor;
+// -----------------------------------------------------------------------------
+// Creation-order metadata
+// -----------------------------------------------------------------------------
+
+function normalizeCreatedOrders(groups) {
+  const result =
+    groups.map(group => ({
+      ...group
+    }));
+
+  const usedOrders =
+    new Set();
+
+  let maxOrder =
+    result.reduce(
+      (max, group) => {
+        if (
+          Number.isInteger(group.createdOrder) &&
+          group.createdOrder > 0
+        ) {
+          return Math.max(
+            max,
+            group.createdOrder
+          );
+        }
+
+        return max;
+      },
+      0
+    );
+
+  let nextOrder =
+    maxOrder + 1;
+
+  let changed = false;
+
+  for (const group of result) {
+    const valid =
+      Number.isInteger(group.createdOrder) &&
+      group.createdOrder > 0 &&
+      !usedOrders.has(group.createdOrder);
+
+    if (valid) {
+      usedOrders.add(
+        group.createdOrder
+      );
+
+      continue;
     }
-  });
+
+    group.createdOrder =
+      nextOrder++;
+
+    usedOrders.add(
+      group.createdOrder
+    );
+
+    changed = true;
+  }
+
+  return {
+    groups: result,
+    changed
+  };
 }
 
-async function refreshList(listElementId) {
-  const { groups = [] } = await browser.storage.local.get("groups");
-  const list = document.getElementById(listElementId);
-  list.innerHTML = "";
-  
-  if (groups.length === 0) {
-    const emptyDiv = document.createElement("div");
-    emptyDiv.className = "empty-message";
-    emptyDiv.textContent = 'No rules configured yet' + 
-      (listElementId === 'groupList' ? '. Add one below!' : '');
-    list.appendChild(emptyDiv);
+async function getGroupsWithCreatedOrder() {
+  const {
+    groups = []
+  } =
+    await browser.storage.local.get(
+      "groups"
+    );
+
+  const normalized =
+    normalizeCreatedOrders(
+      Array.isArray(groups)
+        ? groups
+        : []
+    );
+
+  if (normalized.changed) {
+    await browser.storage.local.set({
+      groups: normalized.groups
+    });
+  }
+
+  return normalized.groups;
+}
+
+function getNextCreatedOrder(
+  groups
+) {
+  return (
+    groups.reduce(
+      (max, group) =>
+        Math.max(
+          max,
+          Number.isInteger(
+            group.createdOrder
+          )
+            ? group.createdOrder
+            : 0
+        ),
+      0
+    ) + 1
+  );
+}
+
+// -----------------------------------------------------------------------------
+// Display sorting
+// -----------------------------------------------------------------------------
+
+function compareRuleNames(
+  a,
+  b
+) {
+  return String(a || "").localeCompare(
+    String(b || ""),
+    undefined,
+    {
+      sensitivity: "base",
+      numeric: true
+    }
+  );
+}
+
+async function getDisplayEntries(
+  groups
+) {
+  const {
+    groupSortMode = "creation"
+  } =
+    await browser.storage.local.get(
+      "groupSortMode"
+    );
+
+  const entries =
+    groups.map(
+      (rule, storageIndex) => ({
+        rule,
+        storageIndex
+      })
+    );
+
+  if (
+    groupSortMode ===
+    "alphabetical"
+  ) {
+    entries.sort(
+      (a, b) =>
+        compareRuleNames(
+          a.rule.name,
+          b.rule.name
+        )
+    );
+  } else {
+    entries.sort(
+      (a, b) => {
+        const aOrder =
+          a.rule.createdOrder ??
+          a.storageIndex;
+
+        const bOrder =
+          b.rule.createdOrder ??
+          b.storageIndex;
+
+        return (
+          aOrder - bOrder
+        );
+      }
+    );
+  }
+
+  return entries;
+}
+
+// -----------------------------------------------------------------------------
+// Color helper
+// -----------------------------------------------------------------------------
+
+async function selectUnusedColor() {
+  const groups =
+    await getGroupsWithCreatedOrder();
+
+  const usedColors =
+    groups.map(
+      group => group.color
+    );
+
+  const unusedColor =
+    availableColors.find(
+      color =>
+        !usedColors.includes(
+          color
+        )
+    );
+
+  const colorSelect =
+    document.getElementById(
+      "color"
+    );
+
+  if (
+    unusedColor &&
+    colorSelect
+  ) {
+    colorSelect.value =
+      unusedColor;
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Rule list
+// -----------------------------------------------------------------------------
+
+async function refreshList(
+  listElementId
+) {
+  const groups =
+    await getGroupsWithCreatedOrder();
+
+  const list =
+    document.getElementById(
+      listElementId
+    );
+
+  if (!list) {
     return;
   }
-  
-  for (let i = 0; i < groups.length; i++) {
-    const g = groups[i];
-    const li = document.createElement("li");
-    
-    const colorIndicator = document.createElement("span");
-    colorIndicator.className = "color-indicator";
-    colorIndicator.style.backgroundColor = colorMap[g.color] || colorMap.blue;
-    
-    const infoDiv = document.createElement("div");
-    infoDiv.className = "group-info";
-    
-    const nameDiv = document.createElement("div");
-    nameDiv.className = "group-name";
-    nameDiv.appendChild(colorIndicator.cloneNode(true));
-    nameDiv.appendChild(document.createTextNode(g.name));
-    
-    const patternDiv = document.createElement("div");
-    patternDiv.className = "group-pattern";
-    patternDiv.textContent = g.pattern;
-    
-    infoDiv.appendChild(nameDiv);
-    infoDiv.appendChild(patternDiv);
-    
-    const buttonContainer = document.createElement("div");
-    buttonContainer.style.display = "flex";
-    buttonContainer.style.gap = "8px";
-    
-    const editBtn = document.createElement("button");
-    editBtn.className = "edit-btn";
-    editBtn.textContent = "✎"; // Pen icon
+
+  list.innerHTML = "";
+
+  if (
+    groups.length === 0
+  ) {
+    const emptyDiv =
+      document.createElement(
+        "div"
+      );
+
+    emptyDiv.className =
+      "empty-message";
+
+    emptyDiv.textContent =
+      "No rules configured yet" +
+      (
+        listElementId ===
+        "groupList"
+          ? ". Add one below!"
+          : ""
+      );
+
+    list.appendChild(
+      emptyDiv
+    );
+
+    return;
+  }
+
+  const entries =
+    await getDisplayEntries(
+      groups
+    );
+
+  for (
+    const entry of entries
+  ) {
+    const {
+      rule: group,
+      storageIndex
+    } = entry;
+
+    const li =
+      document.createElement(
+        "li"
+      );
+
+    const colorIndicator =
+      document.createElement(
+        "span"
+      );
+
+    colorIndicator.className =
+      "color-indicator";
+
+    colorIndicator.style.backgroundColor =
+      colorMap[group.color] ||
+      colorMap.blue;
+
+    const infoDiv =
+      document.createElement(
+        "div"
+      );
+
+    infoDiv.className =
+      "group-info";
+
+    const nameDiv =
+      document.createElement(
+        "div"
+      );
+
+    nameDiv.className =
+      "group-name";
+
+    nameDiv.appendChild(
+      colorIndicator.cloneNode(
+        true
+      )
+    );
+
+    nameDiv.appendChild(
+      document.createTextNode(
+        group.name
+      )
+    );
+
+    const patternDiv =
+      document.createElement(
+        "div"
+      );
+
+    patternDiv.className =
+      "group-pattern";
+
+    patternDiv.textContent =
+      group.pattern;
+
+    infoDiv.appendChild(
+      nameDiv
+    );
+
+    infoDiv.appendChild(
+      patternDiv
+    );
+
+    const buttonContainer =
+      document.createElement(
+        "div"
+      );
+
+    buttonContainer.style.display =
+      "flex";
+
+    buttonContainer.style.gap =
+      "8px";
+
+    const editBtn =
+      document.createElement(
+        "button"
+      );
+
+    editBtn.className =
+      "edit-btn";
+
+    editBtn.textContent = "✎";
     editBtn.title = "Edit rule";
-    editBtn.onclick = () => startEdit(i, g);
-    
-    const deleteBtn = document.createElement("button");
-    deleteBtn.className = "delete-btn";
-    deleteBtn.textContent = "✕"; // X icon
-    deleteBtn.title = "Delete rule";
-    deleteBtn.onclick = () => deleteRule(i, g.name, listElementId);
-    
-    buttonContainer.appendChild(editBtn);
-    buttonContainer.appendChild(deleteBtn);
-    
-    li.appendChild(infoDiv);
-    li.appendChild(buttonContainer);
+
+    editBtn.onclick =
+      () =>
+        startEdit(
+          storageIndex,
+          group
+        );
+
+    const deleteBtn =
+      document.createElement(
+        "button"
+      );
+
+    deleteBtn.className =
+      "delete-btn";
+
+    deleteBtn.textContent = "✕";
+    deleteBtn.title =
+      "Delete rule";
+
+    deleteBtn.onclick =
+      () =>
+        deleteRule(
+          storageIndex,
+          group.name,
+          listElementId
+        );
+
+    buttonContainer.appendChild(
+      editBtn
+    );
+
+    buttonContainer.appendChild(
+      deleteBtn
+    );
+
+    li.appendChild(
+      infoDiv
+    );
+
+    li.appendChild(
+      buttonContainer
+    );
+
     list.appendChild(li);
   }
-  
-  // Update color picker to select unused color when not editing
-  if (editingIndex === null) {
+
+  if (
+    editingIndex === null
+  ) {
     selectUnusedColor();
   }
 }
 
-function startEdit(index, rule) {
-  editingIndex = index;
-  document.getElementById("name").value = rule.name;
-  document.getElementById("pattern").value = rule.pattern;
-  document.getElementById("color").value = rule.color;
-  document.getElementById("submitBtn").textContent = "Update Rule";
-  document.getElementById("cancelBtn").style.display = "inline-block";
-  document.getElementById("name").focus();
-  
-  // Scroll to form if on options page
-  const formTitle = document.getElementById("groupFormTitle");
+// -----------------------------------------------------------------------------
+// Edit / delete
+// -----------------------------------------------------------------------------
+
+function startEdit(
+  index,
+  rule
+) {
+  editingIndex =
+    index;
+
+  document.getElementById(
+    "name"
+  ).value = rule.name;
+
+  document.getElementById(
+    "pattern"
+  ).value = rule.pattern;
+
+  document.getElementById(
+    "color"
+  ).value = rule.color;
+
+  document.getElementById(
+    "submitBtn"
+  ).textContent =
+    "Update Rule";
+
+  document.getElementById(
+    "cancelBtn"
+  ).style.display =
+    "inline-block";
+
+  document.getElementById(
+    "name"
+  ).focus();
+
+  const formTitle =
+    document.getElementById(
+      "groupFormTitle"
+    );
+
   if (formTitle) {
-    formTitle.textContent = "Edit Rule";
-    document.querySelector('.section:last-child').scrollIntoView({ behavior: 'smooth' });
+    formTitle.textContent =
+      "Edit Rule";
+
+    const sections =
+      document.querySelectorAll(
+        ".section"
+      );
+
+    const lastSection =
+      sections[
+        sections.length - 1
+      ];
+
+    lastSection?.scrollIntoView({
+      behavior: "smooth"
+    });
   }
 }
 
-async function deleteRule(index, name, listElementId) {
-  const shouldDelete = window.confirm ? confirm(`Delete rule "${name}"?`) : true;
-  if (!shouldDelete) return;
-  
-  const { groups = [] } = await browser.storage.local.get("groups");
-  groups.splice(index, 1);
-  await browser.storage.local.set({ groups });
-  refreshList(listElementId);
+async function deleteRule(
+  index,
+  name,
+  listElementId
+) {
+  const shouldDelete =
+    window.confirm
+      ? confirm(
+          `Delete rule "${name}"?`
+        )
+      : true;
+
+  if (!shouldDelete) {
+    return;
+  }
+
+  const groups =
+    await getGroupsWithCreatedOrder();
+
+  groups.splice(
+    index,
+    1
+  );
+
+  await browser.storage.local.set({
+    groups
+  });
+
+  if (
+    editingIndex === index
+  ) {
+    cancelEdit();
+  } else if (
+    editingIndex !== null &&
+    editingIndex > index
+  ) {
+    editingIndex--;
+  }
+
+  try {
+    await browser.runtime.sendMessage({
+      action:
+        "applyRulesToAllTabs"
+    });
+  } catch (error) {
+    console.error(
+      "Could not reapply rules after deletion:",
+      error
+    );
+  }
+
+  await refreshList(
+    listElementId
+  );
 }
 
 function cancelEdit() {
   editingIndex = null;
-  document.getElementById("groupForm").reset();
-  document.getElementById("submitBtn").textContent = "Add Rule";
-  document.getElementById("cancelBtn").style.display = "none";
-  
-  const formTitle = document.getElementById("groupFormTitle");
-  if (formTitle) {
-    formTitle.textContent = "Add New Rule";
+
+  const form =
+    document.getElementById(
+      "groupForm"
+    );
+
+  form?.reset();
+
+  const submitBtn =
+    document.getElementById(
+      "submitBtn"
+    );
+
+  if (submitBtn) {
+    submitBtn.textContent =
+      "Add Rule";
   }
-  
-  // Select an unused color for the next rule
+
+  const cancelBtn =
+    document.getElementById(
+      "cancelBtn"
+    );
+
+  if (cancelBtn) {
+    cancelBtn.style.display =
+      "none";
+  }
+
+  const formTitle =
+    document.getElementById(
+      "groupFormTitle"
+    );
+
+  if (formTitle) {
+    formTitle.textContent =
+      "Add New Rule";
+  }
+
   selectUnusedColor();
 }
 
-async function handleFormSubmit(e, listElementId) {
-  e.preventDefault();
-  const name = document.getElementById("name").value.trim();
-  const pattern = document.getElementById("pattern").value.trim();
-  const color = document.getElementById("color").value;
+// -----------------------------------------------------------------------------
+// Add / update rule
+// -----------------------------------------------------------------------------
 
-  if (!name || !pattern) {
-    alert("Please fill in both name and pattern");
+async function handleFormSubmit(
+  event,
+  listElementId
+) {
+  event.preventDefault();
+
+  const name =
+    document
+      .getElementById("name")
+      .value
+      .trim();
+
+  const pattern =
+    document
+      .getElementById("pattern")
+      .value
+      .trim();
+
+  const color =
+    document.getElementById(
+      "color"
+    ).value;
+
+  if (
+    !name ||
+    !pattern
+  ) {
+    alert(
+      "Please fill in both name and pattern"
+    );
+
     return;
   }
 
-  const { groups = [] } = await browser.storage.local.get("groups");
-  
-  if (editingIndex !== null) {
-    // Update existing rule
-    const oldRule = groups[editingIndex];
-    const colorChanged = oldRule.color !== color;
-    const patternChanged = oldRule.pattern !== pattern;
-    
-    groups[editingIndex] = { name, pattern, color };
-    await browser.storage.local.set({ groups });
-    
-    // If color changed, update the existing group's color
-    if (colorChanged) {
-      await browser.runtime.sendMessage({
-        action: "updateGroupColor",
-        groupName: name,
-        newColor: color
-      });
-    }
-    
-    // If pattern changed, ungroup tabs that no longer match
-    if (patternChanged) {
-      await browser.runtime.sendMessage({
-        action: "ungroupMismatchedTabs",
-        groupName: name,
-        newPattern: pattern
-      });
-      // Then apply the new pattern to all tabs
-      await browser.runtime.sendMessage({
-        action: "applyRulesToAllTabs"
-      });
-    }
-    
-    editingIndex = null;
-  } else {
-    // Check for duplicate names when adding
-    if (groups.some(g => g.name.toLowerCase() === name.toLowerCase())) {
-      alert(`A rule named "${name}" already exists`);
+  const groups =
+    await getGroupsWithCreatedOrder();
+
+  const duplicateIndex =
+    groups.findIndex(
+      group =>
+        group.name
+          .trim()
+          .toLowerCase() ===
+        name.toLowerCase()
+    );
+
+  if (
+    duplicateIndex !== -1 &&
+    duplicateIndex !==
+      editingIndex
+  ) {
+    alert(
+      `A rule named "${name}" already exists`
+    );
+
+    return;
+  }
+
+  if (
+    editingIndex !== null
+  ) {
+    const oldRule =
+      groups[editingIndex];
+
+    if (!oldRule) {
+      editingIndex = null;
+
+      alert(
+        "The rule could not be found. Please try again."
+      );
+
       return;
     }
-    groups.push({ name, pattern, color });
-    await browser.storage.local.set({ groups });
-    
-    // Apply new rule to all existing tabs
-    await browser.runtime.sendMessage({
-      action: "applyRulesToAllTabs"
+
+    groups[editingIndex] = {
+      ...oldRule,
+      name,
+      pattern,
+      color
+    };
+  } else {
+    groups.push({
+      name,
+      pattern,
+      color,
+      createdOrder:
+        getNextCreatedOrder(
+          groups
+        )
     });
   }
 
-  e.target.reset();
-  document.getElementById("submitBtn").textContent = "Add Rule";
-  document.getElementById("cancelBtn").style.display = "none";
-  
-  const formTitle = document.getElementById("groupFormTitle");
-  if (formTitle) {
-    formTitle.textContent = "Add New Rule";
+  await browser.storage.local.set({
+    groups
+  });
+
+  try {
+    await browser.runtime.sendMessage({
+      action:
+        "applyRulesToAllTabs"
+    });
+  } catch (error) {
+    console.error(
+      "Could not apply rules:",
+      error
+    );
   }
-  
-  refreshList(listElementId);
+
+  editingIndex = null;
+
+  event.target.reset();
+
+  document.getElementById(
+    "submitBtn"
+  ).textContent =
+    "Add Rule";
+
+  document.getElementById(
+    "cancelBtn"
+  ).style.display =
+    "none";
+
+  const formTitle =
+    document.getElementById(
+      "groupFormTitle"
+    );
+
+  if (formTitle) {
+    formTitle.textContent =
+      "Add New Rule";
+  }
+
+  await refreshList(
+    listElementId
+  );
 }
