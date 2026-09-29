@@ -55,11 +55,15 @@ document
 async function loadSettings() {
   const {
     groupUnmatched = true,
-    groupSortMode = "alphabetical"
+    groupSortMode = "alphabetical",
+    groupColorMode = "assigned",
+    selectedTabTheme = false
   } =
     await browser.storage.local.get([
       "groupUnmatched",
-      "groupSortMode"
+      "groupSortMode",
+      "groupColorMode",
+      "selectedTabTheme"
     ]);
 
   document.getElementById(
@@ -74,7 +78,55 @@ async function loadSettings() {
     "creation"
       ? "creation"
       : "alphabetical";
+
+  document.getElementById(
+    "groupColorMode"
+  ).value =
+    groupColorMode ===
+    "random"
+      ? "random"
+      : "assigned";
+
+  document.getElementById(
+    "selectedTabTheme"
+  ).checked =
+    selectedTabTheme === true;
 }
+
+document
+  .getElementById(
+    "selectedTabTheme"
+  )
+  .addEventListener(
+    "change",
+    async event => {
+      await browser.storage.local.set({
+        selectedTabTheme:
+          event.target.checked
+      });
+    }
+  );
+
+document
+  .getElementById(
+    "groupColorMode"
+  )
+  .addEventListener(
+    "change",
+    async event => {
+      const groupColorMode =
+        event.target.value ===
+        "random"
+          ? "random"
+          : "assigned";
+
+      await browser.storage.local.set({
+        groupColorMode
+      });
+
+      await applyRules();
+    }
+  );
 
 document
   .getElementById(
@@ -294,11 +346,15 @@ async function exportRules() {
 
     const {
       groupUnmatched = true,
-      groupSortMode = "alphabetical"
+      groupSortMode = "alphabetical",
+      groupColorMode = "assigned",
+      selectedTabTheme = false
     } =
       await browser.storage.local.get([
         "groupUnmatched",
-        "groupSortMode"
+        "groupSortMode",
+        "groupColorMode",
+        "selectedTabTheme"
       ]);
 
     const normalizedGroups =
@@ -328,7 +384,16 @@ async function exportRules() {
           groupSortMode ===
           "creation"
             ? "creation"
-            : "alphabetical"
+            : "alphabetical",
+
+        groupColorMode:
+          groupColorMode ===
+          "random"
+            ? "random"
+            : "assigned",
+
+        selectedTabTheme:
+          selectedTabTheme === true
       },
 
       groups:
@@ -423,6 +488,8 @@ function parseBackupPayload(
   let importedGroupUnmatched;
 
   let importedGroupSortMode;
+  let importedGroupColorMode;
+  let importedSelectedTabTheme;
 
   // Raw array compatibility.
   if (Array.isArray(data)) {
@@ -486,6 +553,34 @@ function parseBackupPayload(
       importedGroupSortMode =
         sortMode;
     }
+
+    const colorMode =
+      data.settings
+        ?.groupColorMode ??
+      data.groupColorMode;
+
+    if (
+      colorMode ===
+        "assigned" ||
+      colorMode ===
+        "random"
+    ) {
+      importedGroupColorMode =
+        colorMode;
+    }
+
+    const selectedTabTheme =
+      data.settings
+        ?.selectedTabTheme ??
+      data.selectedTabTheme;
+
+    if (
+      typeof selectedTabTheme ===
+      "boolean"
+    ) {
+      importedSelectedTabTheme =
+        selectedTabTheme;
+    }
   }
 
   if (
@@ -516,7 +611,11 @@ function parseBackupPayload(
     groupUnmatched:
       importedGroupUnmatched,
     groupSortMode:
-      importedGroupSortMode
+      importedGroupSortMode,
+    groupColorMode:
+      importedGroupColorMode,
+    selectedTabTheme:
+      importedSelectedTabTheme
   };
 }
 
@@ -701,6 +800,25 @@ async function importRules(
     ) {
       storageUpdate.groupSortMode =
         imported.groupSortMode;
+    }
+
+    if (
+      imported.groupColorMode ===
+        "assigned" ||
+      imported.groupColorMode ===
+        "random"
+    ) {
+      storageUpdate.groupColorMode =
+        imported.groupColorMode;
+    }
+
+    if (
+      typeof imported
+        .selectedTabTheme ===
+      "boolean"
+    ) {
+      storageUpdate.selectedTabTheme =
+        imported.selectedTabTheme;
     }
 
     await browser.storage.local.set(

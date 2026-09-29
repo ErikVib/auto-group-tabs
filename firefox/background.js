@@ -31,6 +31,36 @@ function normalizeColor(color, fallback = "blue") {
     : fallback;
 }
 
+function shuffle(items) {
+  const shuffled = [...items];
+
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(
+      Math.random() * (i + 1)
+    );
+
+    [shuffled[i], shuffled[j]] =
+      [shuffled[j], shuffled[i]];
+  }
+
+  return shuffled;
+}
+
+function randomGroupColor(usedColors = []) {
+  const unused = [...VALID_COLORS].filter(
+    color => !usedColors.includes(color)
+  );
+
+  const candidates =
+    unused.length > 0
+      ? unused
+      : [...VALID_COLORS];
+
+  return candidates[
+    Math.floor(Math.random() * candidates.length)
+  ];
+}
+
 function normalizeGroupName(name) {
   return String(name || "")
     .trim()
@@ -227,12 +257,14 @@ async function getSettings() {
   const {
     groups = [],
     groupUnmatched = true,
-    groupSortMode = "alphabetical"
+    groupSortMode = "alphabetical",
+    groupColorMode = "assigned"
   } =
     await browser.storage.local.get([
       "groups",
       "groupUnmatched",
-      "groupSortMode"
+      "groupSortMode",
+      "groupColorMode"
     ]);
 
   return {
@@ -246,7 +278,12 @@ async function getSettings() {
     groupSortMode:
       groupSortMode === "creation"
         ? "creation"
-        : "alphabetical"
+        : "alphabetical",
+
+    groupColorMode:
+      groupColorMode === "random"
+        ? "random"
+        : "assigned"
   };
 }
 
@@ -323,18 +360,46 @@ function enqueueWindowOperation(
 // Group lookup
 // -----------------------------------------------------------------------------
 
+// Managed group titles carry their tab count, e.g. "zoom(4)", so a group is
+// identified by its title with that suffix removed.
+const TAB_COUNT_SUFFIX = /\(\d+\)$/;
+
+function groupNameOf(group) {
+  return String(group?.title || "").replace(
+    TAB_COUNT_SUFFIX,
+    ""
+  );
+}
+
+function groupTitle(name, tabCount) {
+  return `${name}(${tabCount})`;
+}
+
 async function findGroups(
   windowId,
-  title
+  name
 ) {
+  const query =
+    windowId == null
+      ? {}
+      : { windowId };
+
   try {
-    return await browser.tabGroups.query({
-      windowId,
-      title
-    });
+    const groups =
+      await browser.tabGroups.query(
+        query
+      );
+
+    return groups.filter(
+      group =>
+        normalizeGroupName(
+          groupNameOf(group)
+        ) ===
+        normalizeGroupName(name)
+    );
   } catch (error) {
     console.error(
-      `Could not query group "${title}" in window ${windowId}:`,
+      `Could not query group "${name}" in window ${windowId}:`,
       error
     );
 
@@ -344,12 +409,12 @@ async function findGroups(
 
 async function findGroup(
   windowId,
-  title
+  name
 ) {
   const groups =
     await findGroups(
       windowId,
-      title
+      name
     );
 
   return groups.length > 0
@@ -357,13 +422,34 @@ async function findGroup(
     : null;
 }
 
+async function countTabsInGroup(
+  groupId,
+  excludedTabId
+) {
+  const tabs =
+    await browser.tabs.query({
+      groupId
+    });
+
+  return tabs.filter(
+    tab => tab.id !== excludedTabId
+  ).length;
+}
+
 async function updateGroupAppearance(
   group,
-  title,
+  name,
   color
 ) {
   const normalizedColor =
-    normalizeColor(color);
+    color == null
+      ? group.color
+      : normalizeColor(color);
+
+  const title = groupTitle(
+    name,
+    await countTabsInGroup(group.id)
+  );
 
   const needsUpdate =
     group.title !== title ||
@@ -390,6 +476,131 @@ async function updateGroupAppearance(
     return group;
   }
 }
+
+async function getManagedGroups(
+  windowId
+) {
+  const {
+    groups: rules,
+    groupUnmatched
+  } = await getSettings();
+
+  const namesByKey = new Map(
+    rules.map(rule => [
+      normalizeGroupName(rule.name),
+      rule.name
+    ])
+  );
+
+  if (groupUnmatched) {
+    namesByKey.set(
+      normalizeGroupName(
+        UNMATCHED_GROUP_NAME
+      ),
+      UNMATCHED_GROUP_NAME
+    );
+  }
+
+  const windowGroups =
+    await browser.tabGroups.query({
+      windowId
+    });
+
+  return windowGroups
+    .map(group => ({
+      group,
+      name: namesByKey.get(
+        normalizeGroupName(
+          groupNameOf(group)
+        )
+      )
+    }))
+    .filter(({ name }) => name != null);
+}
+
+async function updateTabCountsInWindow(
+  windowId,
+  removedTabId
+) {
+  const managed =
+    await getManagedGroups(windowId);
+
+  for (const { group, name } of managed) {
+    const title = groupTitle(
+      name,
+      await countTabsInGroup(
+        group.id,
+        removedTabId
+      )
+    );
+
+    if (group.title === title) {
+      continue;
+    }
+
+    try {
+      await browser.tabGroups.update(
+        group.id,
+        { title }
+      );
+    } catch (error) {
+      console.warn(
+        `Could not update title of group ${group.id}:`,
+        error
+      );
+    }
+  }
+}
+
+function refreshTabCounts(
+  windowId,
+  removedTabId
+) {
+  if (windowId == null) {
+    return;
+  }
+
+  enqueueWindowOperation(
+    windowId,
+    () =>
+      updateTabCountsInWindow(
+        windowId,
+        removedTabId
+      )
+  ).catch(error => {
+    console.warn(
+      `Could not update tab counts in window ${windowId}:`,
+      error
+    );
+  });
+}
+
+browser.tabs.onUpdated.addListener(
+  (tabId, changeInfo, tab) => {
+    refreshTabCounts(tab.windowId);
+  },
+  { properties: ["groupId"] }
+);
+
+browser.tabs.onRemoved.addListener(
+  (tabId, { windowId, isWindowClosing }) => {
+    if (!isWindowClosing) {
+      refreshTabCounts(windowId, tabId);
+    }
+  }
+);
+
+browser.tabs.onAttached.addListener(
+  (tabId, { newWindowId }) => {
+    refreshTabCounts(newWindowId);
+  }
+);
+
+browser.tabs.onDetached.addListener(
+  (tabId, { oldWindowId }) => {
+    refreshTabCounts(oldWindowId, tabId);
+  }
+);
 
 // -----------------------------------------------------------------------------
 // Ensure tabs are in target group
@@ -421,13 +632,32 @@ async function ensureTabsInGroup(
     return null;
   }
 
+  const { groupColorMode } =
+    await getSettings();
+
   let group =
     await findGroup(
       windowId,
       groupName
     );
 
+  let appearanceColor = color;
+
   if (!group) {
+    if (groupColorMode === "random") {
+      const windowGroups =
+        await browser.tabGroups.query({
+          windowId
+        });
+
+      appearanceColor =
+        randomGroupColor(
+          windowGroups.map(
+            windowGroup => windowGroup.color
+          )
+        );
+    }
+
     try {
       const groupId =
         await browser.tabs.group({
@@ -459,6 +689,12 @@ async function ensureTabsInGroup(
       return null;
     }
   } else {
+    // Random colors are assigned on creation and on switching to random mode;
+    // re-applying rules must not reshuffle them.
+    if (groupColorMode === "random") {
+      appearanceColor = null;
+    }
+
     const tabsToMove =
       windowTabs.filter(
         tab =>
@@ -496,7 +732,7 @@ async function ensureTabsInGroup(
   return updateGroupAppearance(
     group,
     groupName,
-    color
+    appearanceColor
   );
 }
 
@@ -560,7 +796,7 @@ async function sortGroupsInWindow(
         if (
           ruleByName.has(
             normalizeGroupName(
-              group.title
+              groupNameOf(group)
             )
           )
         ) {
@@ -570,7 +806,7 @@ async function sortGroupsInWindow(
         return (
           groupUnmatched &&
           normalizeGroupName(
-            group.title
+            groupNameOf(group)
           ) ===
             normalizeGroupName(
               UNMATCHED_GROUP_NAME
@@ -592,8 +828,8 @@ async function sortGroupsInWindow(
     managedGroups.sort(
       (a, b) =>
         compareGroupNames(
-          a.title,
-          b.title
+          groupNameOf(a),
+          groupNameOf(b)
         )
     );
   } else {
@@ -602,14 +838,14 @@ async function sortGroupsInWindow(
         const aRule =
           ruleByName.get(
             normalizeGroupName(
-              a.title
+              groupNameOf(a)
             )
           );
 
         const bRule =
           ruleByName.get(
             normalizeGroupName(
-              b.title
+              groupNameOf(b)
             )
           );
 
@@ -617,7 +853,7 @@ async function sortGroupsInWindow(
         // explicitly-created rules in creation mode.
         const aOrder =
           normalizeGroupName(
-            a.title
+            groupNameOf(a)
           ) ===
           normalizeGroupName(
             UNMATCHED_GROUP_NAME
@@ -632,7 +868,7 @@ async function sortGroupsInWindow(
 
         const bOrder =
           normalizeGroupName(
-            b.title
+            groupNameOf(b)
           ) ===
           normalizeGroupName(
             UNMATCHED_GROUP_NAME
@@ -652,8 +888,8 @@ async function sortGroupsInWindow(
         }
 
         return compareGroupNames(
-          a.title,
-          b.title
+          groupNameOf(a),
+          groupNameOf(b)
         );
       }
     );
@@ -1072,21 +1308,18 @@ async function updateGroupColor(
   groupName,
   newColor
 ) {
-  let groups;
+  const { groupColorMode } =
+    await getSettings();
 
-  try {
-    groups =
-      await browser.tabGroups.query({
-        title: groupName
-      });
-  } catch (error) {
-    console.error(
-      `Could not find groups named "${groupName}":`,
-      error
-    );
-
+  if (groupColorMode === "random") {
     return;
   }
+
+  const groups =
+    await findGroups(
+      undefined,
+      groupName
+    );
 
   const color =
     normalizeColor(
@@ -1114,6 +1347,74 @@ async function updateGroupColor(
   );
 }
 
+async function randomizeGroupColorsInWindow(
+  windowId
+) {
+  const managed =
+    await getManagedGroups(windowId);
+
+  let palette = [];
+
+  for (const { group } of managed) {
+    if (palette.length === 0) {
+      palette = shuffle(VALID_COLORS);
+    }
+
+    try {
+      await browser.tabGroups.update(
+        group.id,
+        {
+          color: palette.pop()
+        }
+      );
+    } catch (error) {
+      console.warn(
+        `Could not update color of group ${group.id}:`,
+        error
+      );
+    }
+  }
+}
+
+async function randomizeAllGroupColors() {
+  const windows =
+    await browser.windows.getAll();
+
+  await Promise.all(
+    windows.map(({ id }) =>
+      enqueueWindowOperation(
+        id,
+        () =>
+          randomizeGroupColorsInWindow(id)
+      )
+    )
+  );
+}
+
+browser.storage.onChanged.addListener(
+  (changes, areaName) => {
+    const change =
+      changes.groupColorMode;
+
+    if (
+      areaName !== "local" ||
+      change?.newValue !== "random" ||
+      change.oldValue === "random"
+    ) {
+      return;
+    }
+
+    randomizeAllGroupColors().catch(
+      error => {
+        console.error(
+          "Could not randomize group colors:",
+          error
+        );
+      }
+    );
+  }
+);
+
 // -----------------------------------------------------------------------------
 // Ungroup tabs no longer matching a modified rule
 // -----------------------------------------------------------------------------
@@ -1122,21 +1423,11 @@ async function ungroupMismatchedTabs(
   groupName,
   newPattern
 ) {
-  let matchingGroups;
-
-  try {
-    matchingGroups =
-      await browser.tabGroups.query({
-        title: groupName
-      });
-  } catch (error) {
-    console.error(
-      `Could not find group "${groupName}":`,
-      error
+  const matchingGroups =
+    await findGroups(
+      undefined,
+      groupName
     );
-
-    return;
-  }
 
   await Promise.all(
     matchingGroups.map(
@@ -1314,6 +1605,251 @@ browser.tabs.onUpdated.addListener(
 );
 
 // -----------------------------------------------------------------------------
+// Selected tab theme
+// -----------------------------------------------------------------------------
+//
+// Extensions cannot style individual tabs, only a window's theme, and any
+// extension theme replaces the installed one: colors it leaves out fall back to
+// white and black rather than to the native look. So this applies a complete
+// palette of its own. theme.update() takes no dark_theme, so the light or dark
+// palette is picked here from the OS setting. The hex values are Firefox's own
+// design tokens: selected tabs use --color-<name>-10 in light and
+// --color-<name>-70 in dark.
+
+const THEME_PALETTES = {
+  light: {
+    colors: {
+      frame: "#efedf2",
+      tab_background_text: "#15141a",
+      toolbar: "#fcfbff",
+      toolbar_text: "#15141a",
+      toolbar_field: "#ffffff",
+      toolbar_field_text: "#15141a",
+      popup: "#fcfbff",
+      popup_text: "#15141a",
+      sidebar: "#fcfbff",
+      sidebar_text: "#15141a",
+      tab_text: "#15141a"
+    },
+    selectedTab: {
+      blue: "#c5eafe",
+      cyan: "#c3eef8",
+      green: "#c4f1e0",
+      orange: "#ffdbc5",
+      pink: "#ffd5ee",
+      purple: "#f6d7ff",
+      red: "#ffd9df",
+      yellow: "#fde8b5",
+      grey: "#d6d5da"
+    }
+  },
+  dark: {
+    colors: {
+      frame: "#1d1b1f",
+      tab_background_text: "#fbfbfe",
+      toolbar: "#312f33",
+      toolbar_text: "#fbfbfe",
+      toolbar_field: "#1d1b1f",
+      toolbar_field_text: "#fbfbfe",
+      popup: "#312f33",
+      popup_text: "#fbfbfe",
+      sidebar: "#252428",
+      sidebar_text: "#fbfbfe",
+      tab_text: "#fbfbfe"
+    },
+    selectedTab: {
+      blue: "#23327b",
+      cyan: "#034554",
+      green: "#004933",
+      orange: "#701c07",
+      pink: "#5f1854",
+      purple: "#4f216b",
+      red: "#69172d",
+      yellow: "#5f3100",
+      grey: "#515054"
+    }
+  }
+};
+
+const DEFAULT_COOKIE_STORE_ID = "firefox-default";
+
+const darkSchemeQuery = window.matchMedia(
+  "(prefers-color-scheme: dark)"
+);
+
+async function getContainerColor(cookieStoreId) {
+  if (
+    !cookieStoreId ||
+    cookieStoreId === DEFAULT_COOKIE_STORE_ID
+  ) {
+    return null;
+  }
+
+  try {
+    const identity =
+      await browser.contextualIdentities.get(
+        cookieStoreId
+      );
+
+    return identity.colorCode;
+  } catch {
+    // Private windows and disabled containers have no identity.
+    return null;
+  }
+}
+
+async function updateWindowTheme(windowId) {
+  const { selectedTabTheme = false } =
+    await browser.storage.local.get(
+      "selectedTabTheme"
+    );
+
+  const [activeTab] =
+    await browser.tabs.query({
+      windowId,
+      active: true
+    });
+
+  if (
+    selectedTabTheme !== true ||
+    !activeTab ||
+    activeTab.groupId == null ||
+    activeTab.groupId === UNGROUPED_ID
+  ) {
+    await browser.theme.reset(windowId);
+    return;
+  }
+
+  const [group, containerColor] =
+    await Promise.all([
+      browser.tabGroups.get(
+        activeTab.groupId
+      ),
+      getContainerColor(
+        activeTab.cookieStoreId
+      )
+    ]);
+
+  const palette =
+    THEME_PALETTES[
+      darkSchemeQuery.matches
+        ? "dark"
+        : "light"
+    ];
+
+  const colors = {
+    ...palette.colors,
+    tab_selected:
+      palette.selectedTab[
+        normalizeColor(group.color, "grey")
+      ]
+  };
+
+  if (containerColor) {
+    colors.tab_line = containerColor;
+  }
+
+  // A fixed scheme here would write itself into the global
+  // browser.theme.*-theme prefs that darkSchemeQuery reads back.
+  await browser.theme.update(windowId, {
+    colors,
+    properties: {
+      color_scheme: "system",
+      content_color_scheme: "system"
+    }
+  });
+}
+
+// Queued with the rule operations so that the last event, not the slowest
+// round trip, decides the window's theme.
+function refreshWindowTheme(windowId) {
+  if (windowId == null) {
+    return;
+  }
+
+  enqueueWindowOperation(
+    windowId,
+    () => updateWindowTheme(windowId)
+  ).catch(error => {
+    console.warn(
+      `Could not update theme of window ${windowId}:`,
+      error
+    );
+  });
+}
+
+browser.tabs.onActivated.addListener(
+  ({ windowId }) => {
+    refreshWindowTheme(windowId);
+  }
+);
+
+browser.tabs.onUpdated.addListener(
+  (tabId, changeInfo, tab) => {
+    if (tab.active) {
+      refreshWindowTheme(tab.windowId);
+    }
+  },
+  { properties: ["groupId"] }
+);
+
+browser.tabGroups.onUpdated.addListener(
+  group => {
+    refreshWindowTheme(group.windowId);
+  }
+);
+
+async function refreshAllWindowThemes() {
+  const windows =
+    await browser.windows.getAll();
+
+  for (const { id } of windows) {
+    refreshWindowTheme(id);
+  }
+}
+
+function logThemeRefreshError(error) {
+  console.warn(
+    "Could not refresh window themes:",
+    error
+  );
+}
+
+// Installing a global theme drops every window override. Window-scoped updates,
+// including this extension's own, carry a windowId and are skipped.
+browser.theme.onUpdated.addListener(
+  ({ windowId }) => {
+    if (windowId == null) {
+      refreshAllWindowThemes().catch(
+        logThemeRefreshError
+      );
+    }
+  }
+);
+
+darkSchemeQuery.addEventListener(
+  "change",
+  () => {
+    refreshAllWindowThemes().catch(
+      logThemeRefreshError
+    );
+  }
+);
+
+browser.storage.onChanged.addListener(
+  (changes, areaName) => {
+    if (
+      areaName === "local" &&
+      "selectedTabTheme" in changes
+    ) {
+      refreshAllWindowThemes().catch(
+        logThemeRefreshError
+      );
+    }
+  }
+);
+
+// -----------------------------------------------------------------------------
 // Initialization
 // -----------------------------------------------------------------------------
 
@@ -1321,6 +1857,8 @@ async function initialize() {
   await migrateStorage();
 
   await applyRulesToAllTabs();
+
+  await refreshAllWindowThemes();
 
   console.log(
     "Auto Group Tabs background initialized"

@@ -358,6 +358,43 @@
         Controls the order of managed groups in the Firefox tab bar and the rule list above.
       </p>
     </div>
+
+    <div class="settings-row">
+      <label for="groupColorMode">
+        Group colors
+      </label>
+
+      <select id="groupColorMode">
+        <option value="assigned">
+          Assigned colors
+        </option>
+
+        <option value="random">
+          Random colors
+        </option>
+      </select>
+
+      <p class="settings-help">
+        Switching to Random recolors open groups named after a rule (and "etc"); other groups are left alone. New groups get a color not yet used in their window when one is left, and keep it.
+      </p>
+    </div>
+
+    <div class="settings-row">
+      <label class="checkbox-label">
+        <input
+          type="checkbox"
+          id="selectedTabTheme"
+        />
+
+        <span>
+          Color the selected tab by its group
+        </span>
+      </label>
+
+      <p class="settings-help">
+        The selected tab takes a tone of its group's color, outlined in its container's color. This replaces your Firefox theme while a grouped tab is selected.
+      </p>
+    </div>
   </div>
 
   <div class="section">

@@ -9,7 +9,7 @@
     "48": "icons/icon48.png",
     "96": "icons/icon96.png"
   },
-  "permissions": ["tabs", "tabGroups", "storage"],
+  "permissions": ["tabs", "tabGroups", "storage", "theme", "contextualIdentities"],
   "background": {
     "scripts": ["background.js"],
     "persistent": true
