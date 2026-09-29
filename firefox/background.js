@@ -582,6 +582,42 @@ browser.tabs.onUpdated.addListener(
   { properties: ["groupId"] }
 );
 
+async function expandGroupOfActiveTab(tab) {
+  if (
+    !tab.active ||
+    tab.groupId == null ||
+    tab.groupId === UNGROUPED_ID
+  ) {
+    return;
+  }
+
+  const group =
+    await browser.tabGroups.get(
+      tab.groupId
+    );
+
+  if (group.collapsed) {
+    await browser.tabGroups.update(
+      group.id,
+      { collapsed: false }
+    );
+  }
+}
+
+browser.tabs.onUpdated.addListener(
+  (tabId, changeInfo, tab) => {
+    expandGroupOfActiveTab(tab).catch(
+      error => {
+        console.warn(
+          `Could not expand the group of tab ${tabId}:`,
+          error
+        );
+      }
+    );
+  },
+  { properties: ["groupId"] }
+);
+
 browser.tabs.onRemoved.addListener(
   (tabId, { windowId, isWindowClosing }) => {
     if (!isWindowClosing) {
