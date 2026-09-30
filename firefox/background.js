@@ -46,15 +46,22 @@ function shuffle(items) {
   return shuffled;
 }
 
-function randomGroupColor(usedColors = []) {
-  const unused = [...VALID_COLORS].filter(
+function randomGroupColor(
+  usedColors = [],
+  forbiddenColors = []
+) {
+  const allowed = [...VALID_COLORS].filter(
+    color => !forbiddenColors.includes(color)
+  );
+
+  const unused = allowed.filter(
     color => !usedColors.includes(color)
   );
 
   const candidates =
     unused.length > 0
       ? unused
-      : [...VALID_COLORS];
+      : allowed;
 
   return candidates[
     Math.floor(Math.random() * candidates.length)
@@ -1029,6 +1036,10 @@ async function sortGroupsInWindow(
     targetIndex +=
       groupTabs.length;
   }
+
+  await separateAdjacentGroupColors(
+    windowId
+  );
 }
 
 async function sortAllGroups() {
@@ -1406,6 +1417,93 @@ async function randomizeGroupColorsInWindow(
     } catch (error) {
       console.warn(
         `Could not update color of group ${group.id}:`,
+        error
+      );
+    }
+  }
+
+  await separateAdjacentGroupColors(
+    windowId
+  );
+}
+
+async function separateAdjacentGroupColors(
+  windowId
+) {
+  const { groupColorMode } =
+    await getSettings();
+
+  if (groupColorMode !== "random") {
+    return;
+  }
+
+  const managedIds = new Set(
+    (await getManagedGroups(windowId))
+      .map(({ group }) => group.id)
+  );
+
+  const tabs =
+    await browser.tabs.query({
+      windowId
+    });
+
+  const orderedGroupIds = [];
+
+  tabs
+    .sort((a, b) => a.index - b.index)
+    .forEach(tab => {
+      if (
+        tab.groupId !== UNGROUPED_ID &&
+        tab.groupId !==
+          orderedGroupIds.at(-1)
+      ) {
+        orderedGroupIds.push(
+          tab.groupId
+        );
+      }
+    });
+
+  const groups = await Promise.all(
+    orderedGroupIds.map(id =>
+      browser.tabGroups.get(id)
+    )
+  );
+
+  for (let i = 1; i < groups.length; i++) {
+    if (groups[i].color !== groups[i - 1].color) {
+      continue;
+    }
+
+    const index =
+      managedIds.has(groups[i].id)
+        ? i
+        : i - 1;
+
+    if (!managedIds.has(groups[index].id)) {
+      continue;
+    }
+
+    const color = randomGroupColor(
+      groups.map(group => group.color),
+      [
+        groups[index - 1]?.color,
+        groups[index + 1]?.color
+      ]
+    );
+
+    try {
+      await browser.tabGroups.update(
+        groups[index].id,
+        { color }
+      );
+
+      groups[index] = {
+        ...groups[index],
+        color
+      };
+    } catch (error) {
+      console.warn(
+        `Could not update color of group ${groups[index].id}:`,
         error
       );
     }
